@@ -124,13 +124,15 @@ class ConversationManager:
         text = await self._transcriber.transcribe(audio, suffix, lang)
         if not text:
             raise NoSpeech()
-        turn = parse_turn(await live.chat.send(format_user_message(text, lang, withdrawn=live.withdrawn)))
+        raw = await live.chat.send(format_user_message(text, lang, withdrawn=live.withdrawn))
+        # Claude has now seen this message, even if its reply turns out to be unusable.
         live.withdrawn = 0
+        live.history.append(None)
+        turn = parse_turn(raw)
 
         if turn.action != "reply":
             if turn.action == "repeat_slower":
                 live.rate = SLOW_RATE
-            live.history.append(None)
             if live.last_assistant is None:
                 raise BrainError("Nothing to repeat yet")
             return TurnResult("repeat", None, None, await self._speak(live, live.last_assistant))
@@ -142,7 +144,7 @@ class ConversationManager:
         assistant = self._db.add_message(
             session_id, "assistant", "th", thai=turn.thai, english=turn.english, english_note=turn.english_note
         )
-        live.history.append(user.id)
+        live.history[-1] = user.id
         live.last_assistant = assistant
         return TurnResult("reply", user, assistant, await self._speak(live, assistant))
 
@@ -183,6 +185,9 @@ class ConversationManager:
             facts = parse_facts(raw)
         except BrainError:
             logger.warning("Memory extraction failed; keeping existing facts", exc_info=True)
+            return current
+        if not facts and current:
+            logger.warning("Memory extraction returned no facts; keeping existing facts")
             return current
         return self._db.replace_facts(facts, source_session_id=session_id)
 

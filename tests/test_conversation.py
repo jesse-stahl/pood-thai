@@ -260,3 +260,26 @@ async def test_overlapping_starts_leave_only_one_live_session(db):
     with pytest.raises(SessionNotFound):
         await manager.replay(first.session_id, slow=False)
     await manager.replay(second.session_id, slow=False)
+
+
+async def test_undo_after_a_failed_turn_withdraws_the_message_claude_saw(db):
+    from pood_thai.prompts import undo_note
+
+    manager, brain, _, _ = make(
+        db, [OPENING, reply_json(thai="ตอบ"), "{garbled", reply_json(thai="ใหม่")], texts=["ผิด", "เอ็กซ์", "ถูก"]
+    )
+    sid = (await manager.start("day")).session_id
+    first = await manager.handle_audio(sid, b"rec", ".webm", "th")
+    with pytest.raises(BrainError):
+        await manager.handle_audio(sid, b"rec", ".webm", "th")
+    assert await manager.undo(sid) == [first.user_message.id, first.assistant_message.id]
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    assert brain.chats[0].sent[-1] == f"{undo_note(2)}\n[Thai] ถูก"
+
+
+async def test_end_keeps_existing_facts_when_memory_reply_is_empty(db):
+    db.replace_facts(["Has a cat named Mochi."], source_session_id=None)
+    manager, _, _, _ = make(db, [OPENING, reply_json()], texts=["สวัสดี"], completion='{"facts": []}')
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    assert [f.fact for f in await manager.end(sid)] == ["Has a cat named Mochi."]
