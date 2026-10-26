@@ -16,7 +16,11 @@ PORT="${POOD_PORT:-8765}"
 uv sync --quiet
 
 (
-  until curl -sf "http://127.0.0.1:${PORT}/api/health" >/dev/null; do sleep 1; done
+  # $$ becomes the uvicorn PID after exec; stop polling if the server exits (e.g. startup failed).
+  until curl -sf "http://127.0.0.1:${PORT}/api/health" >/dev/null; do
+    kill -0 $$ 2>/dev/null || exit 0
+    sleep 1
+  done
   open "http://127.0.0.1:${PORT}/"
 ) &
 

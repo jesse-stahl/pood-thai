@@ -226,3 +226,37 @@ async def test_two_undos_tell_claude_both_messages_were_withdrawn(db):
     assert len(await manager.undo(sid)) == 2
     await manager.handle_audio(sid, b"rec", ".webm", "th")
     assert brain.chats[0].sent[-1] == f"{undo_note(2)}\n[Thai] ค"
+
+
+async def test_undo_after_repeat_withdraws_the_repeat_request_too(db):
+    from pood_thai.prompts import undo_note
+
+    manager, brain, _, _ = make(
+        db,
+        [OPENING, reply_json(thai="ตอบ"), reply_json(action="repeat", thai="", english=""), reply_json(thai="ใหม่")],
+        texts=["ผิด", "อีกครั้ง", "ถูก"],
+    )
+    sid = (await manager.start("day")).session_id
+    first = await manager.handle_audio(sid, b"rec", ".webm", "th")
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    assert await manager.undo(sid) == [first.user_message.id, first.assistant_message.id]
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    # Claude saw "ผิด" and "อีกครั้ง" after the last kept exchange, so both must be withdrawn.
+    assert brain.chats[0].sent[-1] == f"{undo_note(2)}\n[Thai] ถูก"
+
+
+async def test_overlapping_starts_leave_only_one_live_session(db):
+    import asyncio
+
+    class SlowBrain(FakeBrain):
+        async def open_chat(self, system_prompt):
+            await asyncio.sleep(0.01)
+            return await super().open_chat(system_prompt)
+
+    brain = SlowBrain([[OPENING], [OPENING]])
+    manager = ConversationManager(db, brain, FakeTranscriber([]), FakeSpeaker(), today=lambda: "2026-10-26")
+    first, second = await asyncio.gather(manager.start("day"), manager.start("food"))
+    assert brain.chats[0].closed and not brain.chats[1].closed
+    with pytest.raises(SessionNotFound):
+        await manager.replay(first.session_id, slow=False)
+    await manager.replay(second.session_id, slow=False)

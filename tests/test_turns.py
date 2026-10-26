@@ -57,3 +57,9 @@ def test_parse_facts_rejects_garbage():
 def test_malformed_json_is_not_spoken_as_thai():
     with pytest.raises(TurnParseError):
         parse_turn('{"action": "reply", "thai": "สวัสดีค่ะ"')
+
+
+def test_parse_facts_with_only_invalid_entries_is_an_error_not_an_empty_list():
+    with pytest.raises(TurnParseError):
+        parse_facts('{"facts": [null, 42, {}]}')
+    assert parse_facts('{"facts": []}') == []

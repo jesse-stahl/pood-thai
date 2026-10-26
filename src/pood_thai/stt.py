@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import tempfile
 import wave
 from collections.abc import Callable
 from typing import Any
 
 from pood_thai.models import Lang, TranscriptionError
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 
@@ -72,7 +75,9 @@ class MlxWhisperTranscriber:
             try:
                 return await asyncio.to_thread(self._run, audio, suffix, lang)
             except Exception as exc:
-                raise TranscriptionError(f"Speech recognition failed: {exc}") from exc
+                # ffmpeg errors include its whole banner; keep that in the log, not in the UI.
+                logger.warning("Transcription failed", exc_info=True)
+                raise TranscriptionError("could not read the recording") from exc
 
     async def warm_up(self) -> None:
         """Download and load the model so the first real turn is fast."""

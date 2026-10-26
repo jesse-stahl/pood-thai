@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
 
@@ -17,7 +18,7 @@ from pood_thai.prompts import (
     build_system_prompt,
     format_user_message,
 )
-from pood_thai.topics import get_topic
+from pood_thai.topics import Topic, get_topic
 from pood_thai.turns import parse_facts, parse_turn
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,10 @@ class _LiveSession:
     session_id: int
     chat: Chat
     rate: float = DEFAULT_RATE
-    withdrawn: int = 0  # exchanges undone since Claude last heard from the user
+    withdrawn: int = 0  # most recent user messages Claude must ignore, sent with the next message
     last_assistant: Message | None = None
+    # One entry per user message Claude has seen: its stored message id, or None for a repeat request.
+    history: list[int | None] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,7 @@ class ConversationManager:
         self._speaker = speaker
         self._today = today
         self._live: dict[int, _LiveSession] = {}
+        self._start_lock = asyncio.Lock()
 
     def _get(self, session_id: int) -> _LiveSession:
         live = self._live.get(session_id)
@@ -94,6 +98,10 @@ class ConversationManager:
 
     async def start(self, topic_id: str) -> StartResult:
         topic = get_topic(topic_id)
+        async with self._start_lock:  # a double-clicked topic must not leave two live sessions
+            return await self._start(topic)
+
+    async def _start(self, topic: Topic) -> StartResult:
         await self._abandon_live_sessions()
         facts = [f.fact for f in self._db.list_facts()]
         chat = await self._brain.open_chat(build_system_prompt(topic, facts))
@@ -122,6 +130,7 @@ class ConversationManager:
         if turn.action != "reply":
             if turn.action == "repeat_slower":
                 live.rate = SLOW_RATE
+            live.history.append(None)
             if live.last_assistant is None:
                 raise BrainError("Nothing to repeat yet")
             return TurnResult("repeat", None, None, await self._speak(live, live.last_assistant))
@@ -133,6 +142,7 @@ class ConversationManager:
         assistant = self._db.add_message(
             session_id, "assistant", "th", thai=turn.thai, english=turn.english, english_note=turn.english_note
         )
+        live.history.append(user.id)
         live.last_assistant = assistant
         return TurnResult("reply", user, assistant, await self._speak(live, assistant))
 
@@ -148,7 +158,10 @@ class ConversationManager:
         live = self._get(session_id)
         removed = self._db.delete_last_exchange(session_id)
         if removed:
-            live.withdrawn += 1
+            # Withdraw the undone user message and everything Claude heard after it (e.g. repeat requests).
+            user_id = removed[0]
+            if user_id in live.history:
+                live.withdrawn = len(live.history) - live.history.index(user_id)
             assistants = [m for m in self._db.list_messages(session_id) if m.role == "assistant"]
             live.last_assistant = assistants[-1] if assistants else None
         return removed

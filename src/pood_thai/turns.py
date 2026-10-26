@@ -66,4 +66,6 @@ def parse_facts(raw: str) -> list[str]:
     if not isinstance(facts, list):
         raise TurnParseError("'facts' is not a list")
     cleaned = [f.strip() for f in facts if isinstance(f, str) and f.strip()]
+    if facts and not cleaned:
+        raise TurnParseError("'facts' has no valid entries")
     return cleaned[:MAX_FACTS]

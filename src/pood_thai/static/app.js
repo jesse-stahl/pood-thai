@@ -9,7 +9,7 @@ const STATUS = {
   speaking: "Speaking…",
 };
 
-const state = { sessionId: null, recording: false, busy: false, transcriptVisible: false, lastAudio: null };
+const state = { sessionId: null, starting: false, recording: false, busy: false, transcriptVisible: false, lastAudio: null };
 let mediaStream = null;
 let recorder = null;
 let noticeTimer = null;
@@ -167,9 +167,13 @@ function stopMic() {
 }
 
 async function startSession(topicId) {
+  // A double-click must not open two mic streams and two sessions.
+  if (state.starting || state.sessionId !== null) return;
+  state.starting = true;
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
+    state.starting = false;
     showNotice("Microphone access is blocked. Click the icon left of the address bar → Microphone → Allow, then reload the page.", "error");
     return;
   }
@@ -188,6 +192,8 @@ async function startSession(topicId) {
     stopMic();
     showScreen("topics");
     showNotice(errorText(err), "error");
+  } finally {
+    state.starting = false;
   }
 }
 
@@ -279,6 +285,7 @@ async function requestReplay(slow) {
 }
 
 function replay() {
+  if (state.sessionId === null || state.busy || state.recording) return;
   // After an undo the cached audio is the withdrawn reply, so ask the server for the current one.
   if (state.lastAudio) playBlob(state.lastAudio);
   else requestReplay(false);
@@ -330,6 +337,8 @@ function bindButton(id, handler) {
 
 document.addEventListener("keydown", onKey);
 document.addEventListener("keyup", onKey);
+// Switching apps while holding Space swallows the keyup, so stop the recording here instead.
+window.addEventListener("blur", () => { if (state.recording) stopRecording(); });
 bindButton("btn-replay", replay);
 bindButton("btn-slower", slower);
 bindButton("btn-undo", undo);

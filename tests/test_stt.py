@@ -61,3 +61,17 @@ async def test_transcribe_failure_raises_transcription_error():
 
     with pytest.raises(TranscriptionError):
         await MlxWhisperTranscriber(model="m", transcribe_fn=broken).transcribe(b"x", ".webm", "th")
+
+
+async def test_transcription_failure_message_is_short_and_hides_ffmpeg_output():
+    import pytest
+
+    from pood_thai.models import TranscriptionError
+
+    def boom(path, **kwargs):
+        raise RuntimeError("Failed to load audio: ffmpeg version 8.0.1 Copyright ... " + "x" * 2000)
+
+    with pytest.raises(TranscriptionError) as info:
+        await MlxWhisperTranscriber(model="m", transcribe_fn=boom).transcribe(b"x", ".webm", "th")
+    assert len(str(info.value)) < 80
+    assert "ffmpeg version" not in str(info.value)
