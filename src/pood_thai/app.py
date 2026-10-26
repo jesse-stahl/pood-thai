@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -17,7 +18,7 @@ from pood_thai.brain import AgentSdkBrain
 from pood_thai.config import Settings
 from pood_thai.conversation import ConversationManager, NoSpeech, SessionNotFound
 from pood_thai.db import Database
-from pood_thai.models import Audio, BrainError, Fact, Message, SpeechError, TranscriptionError
+from pood_thai.models import Audio, BrainError, Fact, Message, Speaker, SpeechError, TranscriptionError
 from pood_thai.stt import MlxWhisperTranscriber
 from pood_thai.topics import TOPICS
 from pood_thai.tts import AzureSpeaker, FallbackSpeaker, SaySpeaker
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_SUFFIXES = {".webm", ".mp4", ".m4a", ".ogg", ".wav"}
+# The app only serves this machine; other hosts/origins mean DNS rebinding or a cross-site request.
+LOCAL_HOSTS = {"127.0.0.1", "localhost"}
 
 
 class StartRequest(BaseModel):
@@ -83,6 +86,14 @@ def create_app(
         db.close()
 
     app = FastAPI(title="pood-thai", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _local_only(request: Request, call_next):
+        host = urlsplit(f"//{request.headers.get('host', '')}").hostname
+        origin = request.headers.get("origin")
+        if host not in LOCAL_HOSTS or (origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS):
+            return _error(403, "forbidden", "Only requests from this computer are allowed")
+        return await call_next(request)
 
     @app.exception_handler(BadRequest)
     async def _bad_request(_: Request, exc: BadRequest):
@@ -172,6 +183,20 @@ def create_app(
     return app
 
 
+def build_speaker(settings: Settings) -> Speaker:
+    if not settings.azure_key:
+        return SaySpeaker()
+    return FallbackSpeaker(AzureSpeaker(settings.azure_key, settings.azure_region), SaySpeaker())
+
+
+async def safe_warm_up(transcriber: MlxWhisperTranscriber) -> None:
+    """Keep serving if warm-up fails; each turn then reports the transcription error to the user."""
+    try:
+        await transcriber.warm_up()
+    except TranscriptionError:
+        logger.error("Whisper warm-up failed. Is ffmpeg installed (brew install ffmpeg) and did the model download finish?")
+
+
 def build_app() -> FastAPI:
     """Production wiring; used by `uvicorn --factory pood_thai.app:build_app`."""
     logging.basicConfig(level=logging.INFO)
@@ -179,7 +204,7 @@ def build_app() -> FastAPI:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     db = Database(settings.db_path)
     transcriber = MlxWhisperTranscriber(settings.whisper_model)
-    speaker = FallbackSpeaker(AzureSpeaker(settings.azure_key, settings.azure_region), SaySpeaker())
+    speaker = build_speaker(settings)
     brain = AgentSdkBrain(settings.claude_model, settings.data_dir.resolve())
     manager = ConversationManager(db, brain, transcriber, speaker)
-    return create_app(manager, db, on_startup=transcriber.warm_up)
+    return create_app(manager, db, on_startup=lambda: safe_warm_up(transcriber))

@@ -19,7 +19,7 @@ def make_client(tmp_path):
             db, FakeBrain([replies], completion=completion), FakeTranscriber(list(texts)), FakeSpeaker(),
             today=lambda: "2026-10-26",
         )
-        return TestClient(create_app(manager, db)), db
+        return TestClient(create_app(manager, db), base_url="http://127.0.0.1:8765"), db
     return make
 
 
@@ -109,3 +109,34 @@ def test_replay_undo_end_and_memory(make_client):
         assert client.delete(f"/api/memory/{facts[0]['id']}").json() == {"ok": True}
         r = client.delete(f"/api/memory/{facts[0]['id']}")
         assert r.status_code == 404 and r.json()["error"] == "fact_not_found"
+
+
+def test_requests_from_other_hosts_or_origins_are_rejected(make_client):
+    client, _ = make_client([OPENING])
+    with client:
+        assert client.get("/api/memory", headers={"host": "evil.example:8765"}).status_code == 403
+        r = client.post("/api/sessions", json={"topic": "day"}, headers={"origin": "https://evil.example"})
+        assert r.status_code == 403 and r.json()["error"] == "forbidden"
+        assert client.get("/api/memory", headers={"host": "localhost:8765"}).status_code == 200
+        assert client.post("/api/sessions", json={"topic": "day"}, headers={"origin": "http://127.0.0.1:8765"}).status_code == 200
+
+
+def test_build_speaker_uses_mac_voice_directly_without_azure_key():
+    from pood_thai.app import build_speaker
+    from pood_thai.config import Settings
+    from pood_thai.tts import FallbackSpeaker, SaySpeaker
+
+    assert isinstance(build_speaker(Settings.from_env({})), SaySpeaker)
+    assert isinstance(build_speaker(Settings.from_env({"AZURE_SPEECH_KEY": "k"})), FallbackSpeaker)
+
+
+async def test_safe_warm_up_logs_instead_of_raising(caplog):
+    from pood_thai.app import safe_warm_up
+    from pood_thai.models import TranscriptionError
+
+    class Broken:
+        async def warm_up(self):
+            raise TranscriptionError("could not read the recording")
+
+    await safe_warm_up(Broken())
+    assert "ffmpeg" in caplog.text

@@ -9,7 +9,7 @@ const STATUS = {
   speaking: "Speaking…",
 };
 
-const state = { sessionId: null, starting: false, recording: false, busy: false, transcriptVisible: false, lastAudio: null };
+const state = { sessionId: null, fallbackNoticeShown: false, starting: false, recording: false, busy: false, transcriptVisible: false, lastAudio: null };
 let mediaStream = null;
 let recorder = null;
 let noticeTimer = null;
@@ -72,7 +72,10 @@ function playBlob(blob) {
 }
 
 function playPayload(payload) {
-  if (payload.fallback_voice) showNotice("Azure voice unavailable, so I'm using the Mac's built-in Thai voice.");
+  if (payload.fallback_voice && !state.fallbackNoticeShown) {
+    state.fallbackNoticeShown = true;
+    showNotice("Azure voice unavailable, so I'm using the Mac's built-in Thai voice.");
+  }
   const bytes = Uint8Array.from(atob(payload.audio_b64), (c) => c.charCodeAt(0));
   state.lastAudio = new Blob([bytes], { type: payload.audio_mime });
   playBlob(state.lastAudio);
@@ -184,6 +187,7 @@ async function startSession(topicId) {
   try {
     const res = await postJson("/api/sessions", { topic: topicId });
     state.sessionId = res.session_id;
+    state.fallbackNoticeShown = false;
     addMessage(res.message);
     state.busy = false;
     playPayload(res);

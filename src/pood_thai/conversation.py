@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -61,10 +62,30 @@ class TurnResult:
     audio: Audio
 
 
+# Thai words (and the spaces between them) inside an English help note.
+_THAI_RUN = re.compile(r"[\u0e00-\u0e7f]+(?:\s+[\u0e00-\u0e7f]+)*")
+
+
+def _split_note(note: str) -> list[Segment]:
+    """English voices skip Thai script, so give each Thai run in a note to the Thai voice."""
+    segments: list[Segment] = []
+    pos = 0
+    for match in _THAI_RUN.finditer(note):
+        before = note[pos : match.start()].strip()
+        if any(c.isalnum() for c in before):
+            segments.append(Segment(before, "en"))
+        segments.append(Segment(match.group(), "th"))
+        pos = match.end()
+    rest = note[pos:].strip()
+    if any(c.isalnum() for c in rest):
+        segments.append(Segment(rest, "en"))
+    return segments
+
+
 def speech_segments(message: Message) -> list[Segment]:
     segments: list[Segment] = []
     if message.english_note:
-        segments.append(Segment(message.english_note, "en"))
+        segments.extend(_split_note(message.english_note))
     if message.thai:
         segments.append(Segment(message.thai, "th"))
     return segments

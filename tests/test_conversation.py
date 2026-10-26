@@ -86,7 +86,7 @@ async def test_english_turn_speaks_note_in_english_then_thai(db):
     assert result.user_message.lang == "en"
     assert result.user_message.thai == ""
     assert result.user_message.english == "how do I say tired"
-    assert speaker.calls[-1][0] == [Segment("Tired is เหนื่อย.", "en"), Segment("วันนี้เหนื่อยไหมคะ", "th")]
+    assert speaker.calls[-1][0] == [Segment("Tired is", "en"), Segment("เหนื่อย", "th"), Segment("วันนี้เหนื่อยไหมคะ", "th")]
 
 
 async def test_empty_transcript_raises_no_speech_without_calling_claude(db):
@@ -283,3 +283,17 @@ async def test_end_keeps_existing_facts_when_memory_reply_is_empty(db):
     sid = (await manager.start("day")).session_id
     await manager.handle_audio(sid, b"rec", ".webm", "th")
     assert [f.fact for f in await manager.end(sid)] == ["Has a cat named Mochi."]
+
+
+def test_speech_segments_speak_thai_inside_english_notes_with_the_thai_voice():
+    from pood_thai.conversation import speech_segments
+    from pood_thai.models import Message
+
+    note = "You say อร่อย มาก for very tasty. Try it!"
+    message = Message(1, 1, "assistant", "th", "ลองพูดดูนะคะ", "Try saying it", note, "t")
+    assert speech_segments(message) == [
+        Segment("You say", "en"),
+        Segment("อร่อย มาก", "th"),
+        Segment("for very tasty. Try it!", "en"),
+        Segment("ลองพูดดูนะคะ", "th"),
+    ]
