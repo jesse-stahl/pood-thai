@@ -59,6 +59,10 @@ def test_build_options_isolates_from_user_settings(tmp_path):
     assert opts.effort == "low"
     assert opts.thinking == {"type": "disabled"}
     assert opts.cwd == str(tmp_path)
+    # claude.ai connectors (Gmail, Drive...) must not reach the persona, and nothing is saved to ~/.claude.
+    assert opts.env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+    assert opts.strict_mcp_config is True
+    assert "no-session-persistence" in opts.extra_args
 
 
 async def test_chat_send_returns_result_text(tmp_path):

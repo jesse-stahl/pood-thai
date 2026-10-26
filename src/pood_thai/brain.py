@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 def build_options(system_prompt: str, model: str, cwd: Path) -> ClaudeAgentOptions:
-    # setting_sources=[] and skills=[] keep the user's CLAUDE.md, settings and skills out of the persona.
+    # setting_sources=[] and skills=[] keep the user's CLAUDE.md, settings and skills out of the persona;
+    # the env flag and strict_mcp_config keep claude.ai connectors (Gmail, Drive...) out as well.
+    # no-session-persistence stops the CLI saving transcripts under ~/.claude, so undo/forget stay honest.
     return ClaudeAgentOptions(
         model=model,
         system_prompt=system_prompt,
@@ -27,6 +29,9 @@ def build_options(system_prompt: str, model: str, cwd: Path) -> ClaudeAgentOptio
         effort="low",
         thinking={"type": "disabled"},
         cwd=str(cwd),
+        env={"ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
+        strict_mcp_config=True,
+        extra_args={"no-session-persistence": None},
     )
 
 

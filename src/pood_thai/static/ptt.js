@@ -1,7 +1,7 @@
 // Pure push-to-talk logic, kept free of DOM access so it can be unit tested with node --test.
 
 /**
- * @param {{type: string, code: string, shiftKey: boolean, repeat: boolean}} event
+ * @param {{type: string, code: string, shiftKey: boolean, repeat: boolean, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean}} event
  * @param {{recording: boolean, busy: boolean, inSession: boolean}} state
  * @returns {"start_th"|"start_en"|"stop"|"replay"|"undo"|"toggle_transcript"|null}
  */
@@ -11,6 +11,7 @@ export function keyAction(event, state) {
     return event.code === "Space" && state.recording ? "stop" : null;
   }
   if (event.type !== "keydown" || event.repeat) return null;
+  if (event.metaKey || event.ctrlKey || event.altKey) return null; // leave browser shortcuts alone
   if (event.code === "KeyT") return "toggle_transcript";
   if (state.recording || state.busy) return null;
   if (event.code === "Space") return event.shiftKey ? "start_en" : "start_th";

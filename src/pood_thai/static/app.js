@@ -231,7 +231,11 @@ function startRecording(lang) {
   const chunks = [];
   const startedAt = performance.now();
   rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-  rec.onstop = () => sendRecording(lang, rec.mimeType || mime, chunks, performance.now() - startedAt);
+  rec.onstop = () => {
+    // The recorder can stop by itself (e.g. a headset disconnects); never leave the page stuck "recording".
+    if (recorder === rec) state.recording = false;
+    sendRecording(lang, rec.mimeType || mime, chunks, performance.now() - startedAt);
+  };
   recorder = rec;
   rec.start();
   state.recording = true;
@@ -239,7 +243,10 @@ function startRecording(lang) {
 }
 
 function stopRecording() {
-  if (!recorder || recorder.state === "inactive") return;
+  if (!recorder || recorder.state === "inactive") {
+    state.recording = false;
+    return;
+  }
   state.recording = false;
   // Stay busy until onstop hands off to sendRecording, so no new recording or End can slip in between.
   state.busy = true;
@@ -318,7 +325,10 @@ function onKey(event) {
   const inSession = state.sessionId !== null;
   if (inSession && (event.code === "Space" || event.code === "Backspace")) event.preventDefault();
   const action = keyAction(
-    { type: event.type, code: event.code, shiftKey: event.shiftKey, repeat: event.repeat },
+    {
+      type: event.type, code: event.code, shiftKey: event.shiftKey, repeat: event.repeat,
+      metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey,
+    },
     { recording: state.recording, busy: state.busy, inSession },
   );
   switch (action) {

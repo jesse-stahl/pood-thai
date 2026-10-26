@@ -48,3 +48,11 @@ test("suffixForMime", () => {
   assert.equal(suffixForMime("audio/ogg;codecs=opus"), ".ogg");
   assert.equal(suffixForMime(""), ".webm");
 });
+
+test("browser shortcuts with Cmd/Ctrl/Alt are left alone", () => {
+  assert.equal(keyAction(down("KeyR", { metaKey: true }), idle), null);
+  assert.equal(keyAction(down("KeyT", { ctrlKey: true }), idle), null);
+  assert.equal(keyAction(down("Backspace", { altKey: true }), idle), null);
+  assert.equal(keyAction(down("Space", { metaKey: true }), idle), null);
+  assert.equal(keyAction(up("Space"), { ...idle, recording: true }), "stop");
+});
