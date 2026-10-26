@@ -41,6 +41,9 @@ def parse_turn(raw: str) -> Turn:
         text = raw.strip()
         if not text:
             raise TurnParseError("Empty reply") from None
+        if "{" in text:
+            # Malformed JSON: re-raise rather than read braces and keys aloud.
+            raise
         return Turn(action="reply", user_english="", english_note="", thai=text, english="")
     action = data.get("action", "reply")
     if action not in _ACTIONS:

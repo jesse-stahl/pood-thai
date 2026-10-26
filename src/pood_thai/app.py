@@ -17,7 +17,7 @@ from pood_thai.brain import AgentSdkBrain
 from pood_thai.config import Settings
 from pood_thai.conversation import ConversationManager, NoSpeech, SessionNotFound
 from pood_thai.db import Database
-from pood_thai.models import Audio, BrainError, Fact, Message, SpeechError
+from pood_thai.models import Audio, BrainError, Fact, Message, SpeechError, TranscriptionError
 from pood_thai.stt import MlxWhisperTranscriber
 from pood_thai.topics import TOPICS
 from pood_thai.tts import AzureSpeaker, FallbackSpeaker, SaySpeaker
@@ -105,6 +105,11 @@ def create_app(
     async def _speech(_: Request, exc: SpeechError):
         logger.warning("Speech error: %s", exc)
         return _error(503, "speech_unavailable", str(exc))
+
+    @app.exception_handler(TranscriptionError)
+    async def _transcription(_: Request, exc: TranscriptionError):
+        logger.warning("Transcription error: %s", exc)
+        return _error(503, "transcription_failed", str(exc))
 
     @app.get("/api/health")
     async def health():

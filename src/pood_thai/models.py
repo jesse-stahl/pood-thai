@@ -65,6 +65,10 @@ class SpeechError(Exception):
     """Text-to-speech failed."""
 
 
+class TranscriptionError(Exception):
+    """Speech-to-text failed (bad audio, missing ffmpeg, model load error)."""
+
+
 class Transcriber(Protocol):
     async def transcribe(self, audio: bytes, suffix: str, lang: Lang) -> str: ...
 

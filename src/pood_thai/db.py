@@ -136,14 +136,18 @@ class Database:
 
     def replace_facts(self, facts: list[str], source_session_id: int | None) -> list[Fact]:
         """Make the stored facts equal `facts`, keeping rows whose text is unchanged."""
-        existing = {f.fact: f for f in self.list_facts()}
+        facts = list(dict.fromkeys(facts))  # drop duplicates, keep order
+        wanted = set(facts)
+        kept: set[str] = set()
         now = _now()
         with self._conn:
-            for fact in existing.values():
-                if fact.fact not in facts:
+            for fact in self.list_facts():
+                if fact.fact in wanted and fact.fact not in kept:
+                    kept.add(fact.fact)
+                else:
                     self._conn.execute("DELETE FROM memory_facts WHERE id = ?", (fact.id,))
             for text in facts:
-                if text not in existing:
+                if text not in kept:
                     self._conn.execute(
                         "INSERT INTO memory_facts (fact, source_session_id, created_at, updated_at)"
                         " VALUES (?, ?, ?, ?)",

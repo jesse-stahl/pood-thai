@@ -39,7 +39,7 @@ class _LiveSession:
     session_id: int
     chat: Chat
     rate: float = DEFAULT_RATE
-    withdrawn: bool = False
+    withdrawn: int = 0  # exchanges undone since Claude last heard from the user
     last_assistant: Message | None = None
 
 
@@ -117,7 +117,7 @@ class ConversationManager:
         if not text:
             raise NoSpeech()
         turn = parse_turn(await live.chat.send(format_user_message(text, lang, withdrawn=live.withdrawn)))
-        live.withdrawn = False
+        live.withdrawn = 0
 
         if turn.action != "reply":
             if turn.action == "repeat_slower":
@@ -148,7 +148,7 @@ class ConversationManager:
         live = self._get(session_id)
         removed = self._db.delete_last_exchange(session_id)
         if removed:
-            live.withdrawn = True
+            live.withdrawn += 1
             assistants = [m for m in self._db.list_messages(session_id) if m.role == "assistant"]
             live.last_assistant = assistants[-1] if assistants else None
         return removed

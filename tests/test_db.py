@@ -70,3 +70,9 @@ def test_delete_fact(db):
     assert db.delete_fact(facts[0].id) is True
     assert db.delete_fact(facts[0].id) is False
     assert [f.fact for f in db.list_facts()] == ["B."]
+
+
+def test_replace_facts_drops_duplicates_and_never_orphans_rows(db):
+    assert [f.fact for f in db.replace_facts(["A.", "A.", "B."], source_session_id=None)] == ["A.", "B."]
+    assert [f.fact for f in db.replace_facts(["C."], source_session_id=None)] == ["C."]
+    assert [f.fact for f in db.list_facts()] == ["C."]

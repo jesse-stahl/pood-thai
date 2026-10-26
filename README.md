@@ -5,6 +5,7 @@ A voice-only Thai conversation partner that runs on your Mac. Hold Space and spe
 ## Setup (once)
 
 1. Make sure Claude Code is logged in: run `claude` once in a terminal.
+   Whisper also needs ffmpeg: `brew install ffmpeg`.
 2. Optional, for the best voice: create a free Azure Speech resource (pricing tier **F0**) in the Azure portal, then copy `.env.example` to `.env` and fill in `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Without it, the app uses the Mac's built-in Thai voice (Kanya).
 3. `./start.sh`. The first run downloads the Whisper model (~1.5GB).
 

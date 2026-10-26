@@ -49,3 +49,15 @@ async def test_warm_up_calls_transcribe_with_wav():
     t = MlxWhisperTranscriber(model="m", transcribe_fn=lambda path, **kw: calls.append(path) or {"text": ""})
     await t.warm_up()
     assert len(calls) == 1 and calls[0].endswith(".wav")
+
+
+async def test_transcribe_failure_raises_transcription_error():
+    import pytest
+
+    from pood_thai.models import TranscriptionError
+
+    def broken(path, **kwargs):
+        raise RuntimeError("Failed to load audio")
+
+    with pytest.raises(TranscriptionError):
+        await MlxWhisperTranscriber(model="m", transcribe_fn=broken).transcribe(b"x", ".webm", "th")

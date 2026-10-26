@@ -9,7 +9,7 @@ import wave
 from collections.abc import Callable
 from typing import Any
 
-from pood_thai.models import Lang
+from pood_thai.models import Lang, TranscriptionError
 
 DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 
@@ -69,7 +69,10 @@ class MlxWhisperTranscriber:
 
     async def transcribe(self, audio: bytes, suffix: str, lang: Lang) -> str:
         async with self._lock:
-            return await asyncio.to_thread(self._run, audio, suffix, lang)
+            try:
+                return await asyncio.to_thread(self._run, audio, suffix, lang)
+            except Exception as exc:
+                raise TranscriptionError(f"Speech recognition failed: {exc}") from exc
 
     async def warm_up(self) -> None:
         """Download and load the model so the first real turn is fast."""

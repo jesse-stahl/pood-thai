@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from pood_thai.stt import DEFAULT_MODEL as DEFAULT_WHISPER_MODEL
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -27,6 +29,6 @@ class Settings:
             azure_key=env.get("AZURE_SPEECH_KEY", ""),
             azure_region=env.get("AZURE_SPEECH_REGION", "southeastasia"),
             claude_model=env.get("POOD_CLAUDE_MODEL", "sonnet"),
-            whisper_model=env.get("POOD_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"),
+            whisper_model=env.get("POOD_WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
             data_dir=Path(env.get("POOD_DATA_DIR", "./data")),
         )

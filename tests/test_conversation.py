@@ -211,3 +211,18 @@ async def test_close_all_closes_live_chats(db):
     await manager.start("day")
     await manager.close_all()
     assert brain.chats[0].closed
+
+
+async def test_two_undos_tell_claude_both_messages_were_withdrawn(db):
+    from pood_thai.prompts import undo_note
+
+    manager, brain, _, _ = make(
+        db, [OPENING, reply_json(thai="หนึ่ง"), reply_json(thai="สอง"), reply_json(thai="สาม")], texts=["ก", "ข", "ค"]
+    )
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    assert len(await manager.undo(sid)) == 2
+    assert len(await manager.undo(sid)) == 2
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    assert brain.chats[0].sent[-1] == f"{undo_note(2)}\n[Thai] ค"

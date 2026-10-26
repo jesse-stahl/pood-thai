@@ -55,10 +55,19 @@ def build_system_prompt(topic: Topic, facts: list[str]) -> str:
     return _SYSTEM_TEMPLATE.format(label=topic.label, thai=topic.thai, hint=topic.hint, facts=fact_lines)
 
 
-def format_user_message(text: str, lang: Lang, withdrawn: bool = False) -> str:
+def undo_note(count: int) -> str:
+    if count <= 1:
+        return UNDO_NOTE
+    return (
+        f"[Note] The user's previous {count} messages were misheard and have been withdrawn. "
+        "Ignore them and your replies to them."
+    )
+
+
+def format_user_message(text: str, lang: Lang, withdrawn: int = 0) -> str:
     tag = "[Thai]" if lang == "th" else "[English question]"
     line = f"{tag} {text}"
-    return f"{UNDO_NOTE}\n{line}" if withdrawn else line
+    return f"{undo_note(withdrawn)}\n{line}" if withdrawn else line
 
 
 def build_memory_request(messages: list[Message], facts: list[str], today: str) -> str:

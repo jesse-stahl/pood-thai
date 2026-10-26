@@ -50,6 +50,7 @@ function errorText(err) {
     case "no_speech": return "I didn't catch that. Hold Space a little longer and try again.";
     case "brain_unavailable": return `Claude isn't responding (${err.message}). Run "claude" in a terminal to check you're logged in, or wait if you've hit your usage limit.`;
     case "speech_unavailable": return `The voice failed: ${err.message}`;
+    case "transcription_failed": return `Speech recognition failed (${err.message}). Check that ffmpeg is installed, then try again.`;
     case "session_not_found": return "This session has ended. Pick a topic to start again.";
     default: return err.message;
   }
@@ -66,7 +67,8 @@ function playBlob(blob) {
   if (player.src) URL.revokeObjectURL(player.src);
   player.src = URL.createObjectURL(blob);
   setStatus("speaking");
-  player.play().catch(() => setStatus("idle"));
+  // play() rejects with AbortError when a new recording pauses it before it starts; don't clobber that status.
+  player.play().catch(() => { if (!state.recording && !state.busy) setStatus("idle"); });
 }
 
 function playPayload(payload) {
@@ -229,18 +231,20 @@ function startRecording(lang) {
 function stopRecording() {
   if (!recorder || recorder.state === "inactive") return;
   state.recording = false;
+  // Stay busy until onstop hands off to sendRecording, so no new recording or End can slip in between.
+  state.busy = true;
   recorder.stop();
 }
 
 async function sendRecording(lang, mime, chunks, durationMs) {
   if (durationMs < MIN_RECORDING_MS || chunks.length === 0) {
+    state.busy = false;
     setStatus("idle");
     return;
   }
   const form = new FormData();
   form.append("audio", new Blob(chunks, { type: mime }), `recording${suffixForMime(mime)}`);
   form.append("lang", lang);
-  state.busy = true;
   setStatus("thinking");
   try {
     const res = await api(`/api/sessions/${state.sessionId}/turns`, { method: "POST", body: form });
@@ -259,16 +263,12 @@ async function sendRecording(lang, mime, chunks, durationMs) {
 
 // --- controls ---
 
-function replay() {
-  if (state.lastAudio) playBlob(state.lastAudio);
-}
-
-async function slower() {
+async function requestReplay(slow) {
   if (state.sessionId === null || state.busy || state.recording) return;
   state.busy = true;
   setStatus("thinking");
   try {
-    const res = await postJson(`/api/sessions/${state.sessionId}/replay`, { slow: true });
+    const res = await postJson(`/api/sessions/${state.sessionId}/replay`, { slow });
     state.busy = false;
     playPayload(res);
   } catch (err) {
@@ -278,6 +278,14 @@ async function slower() {
   }
 }
 
+function replay() {
+  // After an undo the cached audio is the withdrawn reply, so ask the server for the current one.
+  if (state.lastAudio) playBlob(state.lastAudio);
+  else requestReplay(false);
+}
+
+const slower = () => requestReplay(true);
+
 async function undo() {
   if (state.sessionId === null || state.busy || state.recording) return;
   stopPlayback();
@@ -285,6 +293,7 @@ async function undo() {
   try {
     const { removed_ids: removed } = await api(`/api/sessions/${state.sessionId}/undo`, { method: "POST" });
     for (const id of removed) document.querySelector(`.msg[data-id="${id}"]`)?.remove();
+    if (removed.length) state.lastAudio = null;
     showNotice(removed.length ? "Last turn removed. Say it again." : "Nothing to undo.");
   } catch (err) {
     showNotice(errorText(err), "error");
