@@ -1,0 +1,180 @@
+"""FastAPI app: JSON API for the browser page, plus the static files."""
+
+from __future__ import annotations
+
+import base64
+import logging
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from pood_thai.brain import AgentSdkBrain
+from pood_thai.config import Settings
+from pood_thai.conversation import ConversationManager, NoSpeech, SessionNotFound
+from pood_thai.db import Database
+from pood_thai.models import Audio, BrainError, Fact, Message, SpeechError
+from pood_thai.stt import MlxWhisperTranscriber
+from pood_thai.topics import TOPICS
+from pood_thai.tts import AzureSpeaker, FallbackSpeaker, SaySpeaker
+
+logger = logging.getLogger(__name__)
+
+STATIC_DIR = Path(__file__).parent / "static"
+ALLOWED_SUFFIXES = {".webm", ".mp4", ".m4a", ".ogg", ".wav"}
+
+
+class StartRequest(BaseModel):
+    topic: str
+
+
+class ReplayRequest(BaseModel):
+    slow: bool = False
+
+
+class BadRequest(Exception):
+    pass
+
+
+def message_json(message: Message | None) -> dict | None:
+    if message is None:
+        return None
+    return {
+        "id": message.id,
+        "role": message.role,
+        "lang": message.lang,
+        "thai": message.thai,
+        "english": message.english,
+        "english_note": message.english_note,
+    }
+
+
+def fact_json(fact: Fact) -> dict:
+    return {"id": fact.id, "fact": fact.fact}
+
+
+def audio_json(audio: Audio) -> dict:
+    return {
+        "audio_b64": base64.b64encode(audio.data).decode("ascii"),
+        "audio_mime": audio.mime,
+        "fallback_voice": audio.fallback_used,
+    }
+
+
+def _error(status: int, code: str, detail: str) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": code, "detail": detail})
+
+
+def create_app(
+    manager: ConversationManager,
+    db: Database,
+    on_startup: Callable[[], Awaitable[None]] | None = None,
+) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if on_startup is not None:
+            await on_startup()
+        yield
+        await manager.close_all()
+        db.close()
+
+    app = FastAPI(title="pood-thai", lifespan=lifespan)
+
+    @app.exception_handler(BadRequest)
+    async def _bad_request(_: Request, exc: BadRequest):
+        return _error(400, "bad_request", str(exc))
+
+    @app.exception_handler(SessionNotFound)
+    async def _not_found(_: Request, exc: SessionNotFound):
+        return _error(404, "session_not_found", f"No live session {exc}")
+
+    @app.exception_handler(NoSpeech)
+    async def _no_speech(_: Request, exc: NoSpeech):
+        return _error(422, "no_speech", "No speech recognised")
+
+    @app.exception_handler(BrainError)
+    async def _brain(_: Request, exc: BrainError):
+        logger.warning("Brain error: %s", exc)
+        return _error(503, "brain_unavailable", str(exc))
+
+    @app.exception_handler(SpeechError)
+    async def _speech(_: Request, exc: SpeechError):
+        logger.warning("Speech error: %s", exc)
+        return _error(503, "speech_unavailable", str(exc))
+
+    @app.get("/api/health")
+    async def health():
+        return {"ok": True}
+
+    @app.get("/api/topics")
+    async def topics():
+        return {"topics": [{"id": t.id, "label": t.label, "thai": t.thai} for t in TOPICS]}
+
+    @app.post("/api/sessions")
+    async def start_session(body: StartRequest):
+        try:
+            result = await manager.start(body.topic)
+        except ValueError as exc:
+            raise BadRequest(str(exc)) from exc
+        return {"session_id": result.session_id, "message": message_json(result.message), **audio_json(result.audio)}
+
+    @app.post("/api/sessions/{session_id}/turns")
+    async def turn(session_id: int, audio: UploadFile = File(...), lang: str = Form(...)):
+        if lang not in ("th", "en"):
+            raise BadRequest(f"lang must be 'th' or 'en', got {lang!r}")
+        suffix = Path(audio.filename or "").suffix.lower()
+        if suffix not in ALLOWED_SUFFIXES:
+            suffix = ".webm"
+        result = await manager.handle_audio(session_id, await audio.read(), suffix, lang)
+        return {
+            "kind": result.kind,
+            "user_message": message_json(result.user_message),
+            "assistant_message": message_json(result.assistant_message),
+            **audio_json(result.audio),
+        }
+
+    @app.post("/api/sessions/{session_id}/replay")
+    async def replay(session_id: int, body: ReplayRequest):
+        return audio_json(await manager.replay(session_id, body.slow))
+
+    @app.post("/api/sessions/{session_id}/undo")
+    async def undo(session_id: int):
+        return {"removed_ids": await manager.undo(session_id)}
+
+    @app.post("/api/sessions/{session_id}/end")
+    async def end(session_id: int):
+        return {"facts": [fact_json(f) for f in await manager.end(session_id)]}
+
+    @app.get("/api/memory")
+    async def memory():
+        return {"facts": [fact_json(f) for f in db.list_facts()]}
+
+    @app.delete("/api/memory/{fact_id}")
+    async def delete_memory(fact_id: int):
+        if not db.delete_fact(fact_id):
+            return _error(404, "fact_not_found", f"No fact {fact_id}")
+        return {"ok": True}
+
+    @app.get("/")
+    async def index():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    return app
+
+
+def build_app() -> FastAPI:
+    """Production wiring; used by `uvicorn --factory pood_thai.app:build_app`."""
+    logging.basicConfig(level=logging.INFO)
+    settings = Settings.from_env()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(settings.db_path)
+    transcriber = MlxWhisperTranscriber(settings.whisper_model)
+    speaker = FallbackSpeaker(AzureSpeaker(settings.azure_key, settings.azure_region), SaySpeaker())
+    brain = AgentSdkBrain(settings.claude_model, settings.data_dir.resolve())
+    manager = ConversationManager(db, brain, transcriber, speaker)
+    return create_app(manager, db, on_startup=transcriber.warm_up)
