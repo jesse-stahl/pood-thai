@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
-from pood_thai.models import Audio, Lang, Segment
+from pood_thai.models import Audio, Lang, Segment, Word
 
 
 class FakeTranscriber:
@@ -18,12 +19,17 @@ class FakeTranscriber:
 
 
 class FakeSpeaker:
-    def __init__(self) -> None:
-        self.calls: list[tuple[list[Segment], float]] = []
+    """Speaks each segment as one 'word' lasting 0.5 s, so word timings flow through like Azure's."""
 
-    async def synthesize(self, segments: list[Segment], rate: float) -> Audio:
-        self.calls.append((list(segments), rate))
-        return Audio(data=("AUDIO:" + "|".join(s.text for s in segments)).encode(), mime="audio/mpeg")
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[Segment], str]] = []
+
+    async def synthesize(self, segments: list[Segment], voice: str) -> Audio:
+        self.calls.append((list(segments), voice))
+        words = tuple(
+            Word(s.part, s.offset, s.offset + len(s.text), i * 0.5, i * 0.5 + 0.5) for i, s in enumerate(segments)
+        )
+        return Audio(data=("AUDIO:" + "|".join(s.text for s in segments)).encode(), mime="audio/mpeg", words=words)
 
 
 class FakeChat:
@@ -43,7 +49,7 @@ class FakeChat:
 class FakeBrain:
     """open_chat() returns a fresh FakeChat per call, fed from `chat_replies` in order."""
 
-    def __init__(self, chat_replies: list[list[str]], completion: str = '{"facts": []}'):
+    def __init__(self, chat_replies: list[list[str]], completion: "str | Callable[[str, str], str]" = '{"facts": []}'):
         self._chat_replies = list(chat_replies)
         self.chats: list[FakeChat] = []
         self.system_prompts: list[str] = []
@@ -58,7 +64,8 @@ class FakeBrain:
 
     async def complete(self, system_prompt: str, message: str) -> str:
         self.complete_calls.append((system_prompt, message))
-        return self.completion
+        # A callable completion answers per prompt (e.g. memory vs review) instead of one fixed reply.
+        return self.completion(system_prompt, message) if callable(self.completion) else self.completion
 
 
 def reply_json(

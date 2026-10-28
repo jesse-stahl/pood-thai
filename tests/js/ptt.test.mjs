@@ -56,3 +56,16 @@ test("browser shortcuts with Cmd/Ctrl/Alt are left alone", () => {
   assert.equal(keyAction(down("Space", { metaKey: true }), idle), null);
   assert.equal(keyAction(up("Space"), { ...idle, recording: true }), "stop");
 });
+
+test("player keys work while thinking but not while recording", () => {
+  assert.equal(keyAction(down("ArrowLeft"), idle), "prev_word");
+  assert.equal(keyAction(down("ArrowRight"), idle), "next_word");
+  assert.equal(keyAction(down("ArrowUp"), idle), "speed_up");
+  assert.equal(keyAction(down("ArrowDown"), idle), "speed_down");
+  assert.equal(keyAction(down("Enter"), idle), "play_pause");
+  assert.equal(keyAction(down("KeyE"), idle), "toggle_english");
+  assert.equal(keyAction(down("ArrowRight"), { ...idle, busy: true }), "next_word");
+  assert.equal(keyAction(down("Enter"), { ...idle, recording: true }), null);
+  assert.equal(keyAction(down("KeyE"), { ...idle, recording: true }), "toggle_english");
+  assert.equal(keyAction(down("ArrowLeft", { metaKey: true }), idle), null);
+});

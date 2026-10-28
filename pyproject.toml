@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Voice-only Thai conversation partner"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "azure-cognitiveservices-speech>=1.53",
   "claude-agent-sdk>=0.2.174",
   "fastapi>=0.115",
   "httpx>=0.27",
