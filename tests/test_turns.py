@@ -111,3 +111,18 @@ def test_parse_review_fails_when_no_entry_matches_a_sentence():
         with pytest.raises(TurnParseError):
             parse_review(raw, ["ก", "ข"])
     assert parse_review('{"items": [], "tips": []}', []) == ((), ())
+
+
+def test_parse_review_rejects_shifted_or_out_of_range_numbering():
+    zero_based = '{"items": [{"n": 0, "ok": true}, {"n": 1, "ok": false, "better": "ซื้อมะม่วงสองลูกครับ", "why": "x"}]}'
+    too_high = '{"items": [{"n": 1, "ok": true}, {"n": 3, "ok": true}]}'
+    for raw in (zero_based, too_high):
+        with pytest.raises(TurnParseError):
+            parse_review(raw, ["ไปตลาดครับ", "ซื้อมะม่วงสองครับ"])
+
+
+def test_parse_review_ignores_digit_like_symbols_and_reads_thai_digits():
+    with pytest.raises(TurnParseError):
+        parse_review('{"items": [{"n": "²", "ok": true}]}', ["ก"])
+    items, _ = parse_review('{"items": [{"n": "๑", "ok": false, "better": "ข", "why": "y"}]}', ["ก"])
+    assert items == (ReviewItem("ก", False, "ข", "y"),)

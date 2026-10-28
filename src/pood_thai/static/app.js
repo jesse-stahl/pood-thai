@@ -783,9 +783,10 @@ function onKey(event) {
     { recording: state.recording, busy: state.busy, inSession: active },
   );
   // In a session every push-to-talk key is ours; on the review screen only the player keys are, so the rest still scroll.
-  const handled = state.reviewing ? REVIEW_ACTIONS.has(action) : state.sessionId !== null;
+  // Until a clip is loaded the review player is hidden, so let arrows scroll instead of silently changing speed.
+  const handled = state.reviewing ? REVIEW_ACTIONS.has(action) && state.currentKey !== null : state.sessionId !== null;
   if (handled && !modified && KEYS_WITH_DEFAULTS.has(event.code)) event.preventDefault();
-  if (state.reviewing && !REVIEW_ACTIONS.has(action)) return;
+  if (state.reviewing && !handled) return;
   switch (action) {
     case "start_th": startRecording("th"); break;
     case "start_en": startRecording("en"); break;

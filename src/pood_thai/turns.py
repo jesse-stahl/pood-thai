@@ -80,7 +80,7 @@ def _item_number(value: object) -> int | None:
     # bool is an int subclass, so check the exact type; models sometimes send numbers as strings.
     if type(value) is int:
         return value
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isdecimal():  # isdecimal: int() accepts it (incl. Thai ๑); isdigit doesn't
         return int(value)
     return None
 
@@ -93,7 +93,10 @@ def parse_review(raw: str, sentences: list[str]) -> tuple[tuple[ReviewItem, ...]
         raise TurnParseError("'items' is not a list")
     # type() rather than isinstance(): JSON true would otherwise count as sentence 1.
     by_number = {n: e for e in entries if isinstance(e, dict) and (n := _item_number(e.get("n"))) is not None}
-    if sentences and not any(n in by_number for n in range(1, len(sentences) + 1)):
+    if any(n < 1 or n > len(sentences) for n in by_number):
+        # Shifted numbering (e.g. counting from 0) would pin verdicts on the wrong sentences.
+        raise TurnParseError("Review item numbers are outside the numbered sentences")
+    if sentences and not by_number:
         # Nothing lines up with the numbered sentences, so this isn't a review; don't pass it off as "all natural".
         raise TurnParseError("Review items don't match any sentence number")
     items: list[ReviewItem] = []
