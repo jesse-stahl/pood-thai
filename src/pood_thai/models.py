@@ -74,6 +74,26 @@ class Audio:
     words: tuple[Word, ...] = ()
 
 
+@dataclass(frozen=True)
+class ReviewItem:
+    """One Thai sentence the learner said, and (when it could be more natural) a better version."""
+
+    said: str
+    ok: bool
+    better: str = ""
+    why: str = ""
+
+
+@dataclass(frozen=True)
+class Review:
+    id: int
+    session_id: int
+    topic: str
+    created_at: str
+    items: tuple[ReviewItem, ...]
+    tips: tuple[str, ...]
+
+
 class BrainError(Exception):
     """Claude could not produce a usable reply."""
 

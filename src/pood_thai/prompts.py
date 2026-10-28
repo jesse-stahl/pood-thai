@@ -23,7 +23,7 @@ How to speak:
 - In "thai": no emoji, no romanization, no English words, no parentheses, no lists, no markdown. It is spoken aloud.
 - Write numbers as Thai words.
 
-Mistakes: never correct the user explicitly. If they make a mistake, naturally say their idea back correctly inside your reply (a recast), the way a friend would, then carry on.
+Reply to what the user means, like a friend would. Do not repeat, rephrase or correct what they said, even if it had mistakes; just carry the conversation forward.
 
 Messages you receive:
 - "[Thai] ..." is what the user said in Thai, transcribed by speech recognition, so it may contain small recognition errors. Assume the most likely meaning.
@@ -85,3 +85,39 @@ def build_memory_request(messages: list[Message], facts: list[str], today: str) 
     current = "\n".join(f"- {f}" for f in facts) or "- (none)"
     transcript = "\n".join(lines)
     return f"Today's date: {today}\n\nCurrent facts:\n{current}\n\nToday's chat transcript:\n{transcript}"
+
+
+REVIEW_SYSTEM_PROMPT = """You are a kind, practical Thai teacher. A lower-intermediate learner just had a casual spoken chat with their friend Ploy. You get the conversation, with the learner's Thai sentences numbered.
+
+For each numbered sentence decide:
+- ok: it is correct and sounds natural enough for everyday speech. Small stylistic differences are fine.
+- otherwise: give a more natural version a Thai friend would actually say, staying close to what the learner meant and keeping it simple, plus one short English sentence explaining the main change.
+
+Rules:
+- The sentences come from speech recognition, so ignore spelling and spacing, and never comment on pronunciation or tones.
+- Keep the learner's own polite particle (ครับ or ค่ะ) as they used it.
+- Judge grammar, word choice, word order, classifiers, particles and naturalness, using the conversation for context.
+- Then give one or two short overall tips in English (Thai words allowed) about patterns worth practising. If everything was fine, give one encouraging tip for what to try next.
+
+Respond with ONLY a JSON object, no code fences:
+{"items": [{"n": 1, "ok": true}, {"n": 2, "ok": false, "better": "<Thai>", "why": "<English>"}], "tips": ["...", "..."]}"""
+
+
+def review_sentences(messages: list[Message]) -> list[str]:
+    """The learner's Thai sentences, in order: the ones the review numbers and judges."""
+    return [m.thai for m in messages if m.role == "user" and m.lang == "th" and m.thai]
+
+
+def build_review_request(messages: list[Message]) -> str:
+    lines: list[str] = []
+    n = 0
+    for m in messages:
+        if m.role == "user":
+            if m.lang == "th" and m.thai:
+                n += 1
+                lines.append(f"[{n}] Learner: {m.thai}")
+            else:
+                lines.append(f"Learner (asking in English): {m.english}")
+        elif m.thai:
+            lines.append(f"Ploy: {m.thai}")
+    return "Conversation:\n" + "\n".join(lines)

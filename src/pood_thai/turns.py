@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pood_thai.models import BrainError, Turn
+from pood_thai.models import BrainError, ReviewItem, Turn
 
 _ACTIONS = ("reply", "repeat", "repeat_slower")
 MAX_FACTS = 30
+MAX_TIPS = 2
 
 
 class TurnParseError(BrainError):
@@ -69,3 +70,45 @@ def parse_facts(raw: str) -> list[str]:
     if facts and not cleaned:
         raise TurnParseError("'facts' has no valid entries")
     return cleaned[:MAX_FACTS]
+
+
+def _unspaced(text: str) -> str:
+    return "".join(text.split())
+
+
+def _item_number(value: object) -> int | None:
+    # bool is an int subclass, so check the exact type; models sometimes send numbers as strings.
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and len(value.strip()) <= 6 and value.strip().isdecimal():  # isdecimal: int() accepts it (incl. Thai ๑); isdigit doesn't
+        return int(value)
+    return None
+
+
+def parse_review(raw: str, sentences: list[str]) -> tuple[tuple[ReviewItem, ...], tuple[str, ...]]:
+    """One item per learner sentence (matched by number); anything unclear counts as ok."""
+    data = extract_json_object(raw)
+    entries = data.get("items")
+    if not isinstance(entries, list):
+        raise TurnParseError("'items' is not a list")
+    # type() rather than isinstance(): JSON true would otherwise count as sentence 1.
+    by_number = {n: e for e in entries if isinstance(e, dict) and (n := _item_number(e.get("n"))) is not None}
+    if any(n < 1 or n > len(sentences) for n in by_number):
+        # Shifted numbering (e.g. counting from 0) would pin verdicts on the wrong sentences.
+        raise TurnParseError("Review item numbers are outside the numbered sentences")
+    if sentences and not by_number:
+        # Nothing lines up with the numbered sentences, so this isn't a review; don't pass it off as "all natural".
+        raise TurnParseError("Review items don't match any sentence number")
+    items: list[ReviewItem] = []
+    for n, said in enumerate(sentences, start=1):
+        entry = by_number.get(n, {})
+        better = _text(entry, "better")
+        why = _text(entry, "why")
+        # Speech recognition spacing is noise (the prompt says to ignore it), so a respaced copy is no fix.
+        if entry.get("ok") is False and better and _unspaced(better) != _unspaced(said):
+            items.append(ReviewItem(said, False, better, why))
+        else:
+            items.append(ReviewItem(said, True))
+    raw_tips = data.get("tips")
+    tips = [t.strip() for t in raw_tips if isinstance(t, str) and t.strip()] if isinstance(raw_tips, list) else []
+    return tuple(items), tuple(tips[:MAX_TIPS])

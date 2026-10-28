@@ -61,3 +61,22 @@ async def test_claude_opening_turn_is_valid_thai_json(tmp_path):
         assert reply.action == "repeat_slower"
     finally:
         await chat.close()
+
+
+async def test_claude_review_flags_a_missing_classifier(tmp_path):
+    from pood_thai.models import Message
+    from pood_thai.prompts import REVIEW_SYSTEM_PROMPT, build_review_request, review_sentences
+    from pood_thai.turns import parse_review
+
+    messages = [
+        Message(1, 1, "assistant", "th", "วันนี้ไปไหนมาคะ", "", "", "t"),
+        Message(2, 1, "user", "th", "ผมไปตลาดมาครับ", "", "", "t"),
+        Message(3, 1, "assistant", "th", "ซื้ออะไรมาคะ", "", "", "t"),
+        Message(4, 1, "user", "th", "ผมซื้อมะม่วงสองครับ", "", "", "t"),
+    ]
+    raw = await AgentSdkBrain("sonnet", tmp_path).complete(REVIEW_SYSTEM_PROMPT, build_review_request(messages))
+    items, tips = parse_review(raw, review_sentences(messages))
+    print(items, tips)
+    assert len(items) == 2
+    assert not items[1].ok and "ลูก" in items[1].better
+    assert 1 <= len(tips) <= 2

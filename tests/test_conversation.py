@@ -4,11 +4,12 @@ from pood_thai.conversation import (
     ConversationManager,
     MessageNotFound,
     NoSpeech,
+    ReviewNotFound,
     SessionNotFound,
 )
 from pood_thai.db import Database
-from pood_thai.models import DEFAULT_VOICE, BrainError, Segment
-from pood_thai.prompts import MEMORY_SYSTEM_PROMPT, SESSION_START, UNDO_NOTE
+from pood_thai.models import DEFAULT_VOICE, BrainError, ReviewItem, Segment
+from pood_thai.prompts import MEMORY_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, SESSION_START, UNDO_NOTE
 from tests.fakes import FakeBrain, FakeSpeaker, FakeTranscriber, reply_json
 
 OPENING = reply_json(thai="สวัสดีค่ะ วันนี้เป็นยังไงบ้างคะ", english="Hi! How was today?")
@@ -176,11 +177,11 @@ async def test_end_closes_chat_marks_ended_and_replaces_facts(db):
     )
     sid = (await manager.start("day")).session_id
     await manager.handle_audio(sid, b"rec", ".webm", "th")
-    facts = await manager.end(sid)
+    facts = (await manager.end(sid)).facts
     assert brain.chats[0].closed
     assert db.session_ended_at(sid) is not None
     assert [f.fact for f in facts] == ["Has a cat."]
-    system, request = brain.complete_calls[0]
+    system, request = next(c for c in brain.complete_calls if c[0] == MEMORY_SYSTEM_PROMPT)
     assert system == MEMORY_SYSTEM_PROMPT
     assert "Today's date: 2026-10-26" in request and "ฉันมีแมว" in request
     with pytest.raises(SessionNotFound):
@@ -191,7 +192,7 @@ async def test_end_without_user_turns_skips_memory_extraction(db):
     db.replace_facts(["Old fact."], source_session_id=None)
     manager, brain, _, _ = make(db, [OPENING])
     sid = (await manager.start("day")).session_id
-    facts = await manager.end(sid)
+    facts = (await manager.end(sid)).facts
     assert brain.complete_calls == []
     assert [f.fact for f in facts] == ["Old fact."]
 
@@ -201,7 +202,7 @@ async def test_end_keeps_facts_when_memory_reply_is_garbage(db):
     manager, _, _, _ = make(db, [OPENING, reply_json()], texts=["สวัสดี"], completion="sorry, no")
     sid = (await manager.start("day")).session_id
     await manager.handle_audio(sid, b"rec", ".webm", "th")
-    assert [f.fact for f in await manager.end(sid)] == ["Old fact."]
+    assert [f.fact for f in (await manager.end(sid)).facts] == ["Old fact."]
 
 
 async def test_unknown_session_raises(db):
@@ -301,7 +302,7 @@ async def test_end_keeps_existing_facts_when_memory_reply_is_empty(db):
     manager, _, _, _ = make(db, [OPENING, reply_json()], texts=["สวัสดี"], completion='{"facts": []}')
     sid = (await manager.start("day")).session_id
     await manager.handle_audio(sid, b"rec", ".webm", "th")
-    assert [f.fact for f in await manager.end(sid)] == ["Has a cat named Mochi."]
+    assert [f.fact for f in (await manager.end(sid)).facts] == ["Has a cat named Mochi."]
 
 
 def test_speech_segments_speak_thai_inside_english_notes_with_the_thai_voice():
@@ -316,3 +317,116 @@ def test_speech_segments_speak_thai_inside_english_notes_with_the_thai_voice():
         Segment("for very tasty. Try it!", "en", "note", 18),
         Segment("ลองพูดดูนะคะ", "th"),
     ]
+
+
+REVIEW = (
+    '{"items": [{"n": 1, "ok": false, "better": "ฉันมีแมวหนึ่งตัว", "why": "Add the number and classifier."}],'
+    ' "tips": ["Use classifiers when you count."]}'
+)
+
+
+def memory_and_review(memory_json, review_json=REVIEW):
+    def complete(system_prompt, message):
+        return review_json if system_prompt == REVIEW_SYSTEM_PROMPT else memory_json
+    return complete
+
+
+async def test_end_reviews_the_thai_turns_and_saves_the_review(db):
+    manager, brain, _, _ = make(
+        db, [OPENING, reply_json(user_english="I have a cat")], texts=["ฉันมีแมว"],
+        completion=memory_and_review('{"facts": ["Has a cat."]}'),
+    )
+    sid = (await manager.start("food")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    result = await manager.end(sid)
+    assert [f.fact for f in result.facts] == ["Has a cat."]
+    review = result.review
+    assert review.session_id == sid and review.topic == "food"
+    assert review.items == (ReviewItem("ฉันมีแมว", False, "ฉันมีแมวหนึ่งตัว", "Add the number and classifier."),)
+    assert review.tips == ("Use classifiers when you count.",)
+    assert db.get_review(review.id) == review
+    review_call = next(c for c in brain.complete_calls if c[0] == REVIEW_SYSTEM_PROMPT)
+    assert "[1] Learner: ฉันมีแมว" in review_call[1]
+
+
+async def test_end_without_thai_turns_makes_no_review(db):
+    manager, brain, _, _ = make(
+        db, [OPENING, reply_json(english_note="Cat is แมว.")], texts=["how do I say cat"],
+        completion=memory_and_review('{"facts": []}'),
+    )
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "en")
+    result = await manager.end(sid)
+    assert result.review is None
+    assert all(c[0] != REVIEW_SYSTEM_PROMPT for c in brain.complete_calls)
+    assert result.review_failed is False
+
+
+async def test_a_failed_review_still_saves_memory(db):
+    manager, _, _, _ = make(
+        db, [OPENING, reply_json()], texts=["ฉันมีแมว"],
+        completion=memory_and_review('{"facts": ["Has a cat."]}', review_json="sorry, no"),
+    )
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    result = await manager.end(sid)
+    assert result.review is None
+    assert [f.fact for f in result.facts] == ["Has a cat."]
+    assert db.list_reviews() == []
+    assert result.review_failed is True
+
+
+async def test_speak_review_speaks_the_better_version_only(db):
+    manager, _, _, speaker = make(
+        db, [OPENING, reply_json()], texts=["ฉันมีแมว"], completion=memory_and_review('{"facts": []}'),
+    )
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    review = (await manager.end(sid)).review
+    audio = await manager.speak_review(review.id, 0, "achara")
+    assert speaker.calls[-1] == ([Segment("ฉันมีแมวหนึ่งตัว", "th")], "achara")
+    assert audio.words[0].part == "thai"
+    ok_review = db.add_review(sid, "day", (ReviewItem("ดีครับ", True),), ())
+    for review_id, index in ((review.id, 5), (999, 0), (ok_review.id, 0)):
+        with pytest.raises(ReviewNotFound):
+            await manager.speak_review(review_id, index, "achara")
+
+
+async def test_an_unexpected_review_error_still_returns_the_saved_facts(db, monkeypatch):
+    import sqlite3
+
+    manager, _, _, _ = make(
+        db, [OPENING, reply_json()], texts=["ฉันมีแมว"], completion=memory_and_review('{"facts": ["Has a cat."]}'),
+    )
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "add_review", locked)
+    result = await manager.end(sid)
+    assert [f.fact for f in result.facts] == ["Has a cat."]
+    assert result.review is None and result.review_failed is True
+
+
+async def test_memory_and_review_run_at_the_same_time(db):
+    import asyncio
+
+    started = {"memory": asyncio.Event(), "review": asyncio.Event()}
+
+    class WaitingBrain(FakeBrain):
+        async def complete(self, system_prompt, message):
+            mine, other = ("review", "memory") if system_prompt == REVIEW_SYSTEM_PROMPT else ("memory", "review")
+            started[mine].set()
+            # Run one after the other and this times out: each call waits until the other has started.
+            await asyncio.wait_for(started[other].wait(), 1)
+            return await super().complete(system_prompt, message)
+
+    brain = WaitingBrain([[OPENING, reply_json()]], completion=memory_and_review('{"facts": ["Has a cat."]}'))
+    manager = ConversationManager(db, brain, FakeTranscriber(["ฉันมีแมว"]), FakeSpeaker(), today=lambda: "2026-10-28")
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    result = await manager.end(sid)
+    assert [f.fact for f in result.facts] == ["Has a cat."]
+    assert result.review is not None and result.review_failed is False

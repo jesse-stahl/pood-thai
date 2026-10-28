@@ -19,6 +19,11 @@
         <ul id="memory-list"></ul>
         <p id="memory-empty" class="muted">Nothing yet. Have a chat first.</p>
       </details>
+      <details id="reviews-panel" class="memory reviews">
+        <summary>Past reviews</summary>
+        <ul id="reviews-list"></ul>
+        <p id="reviews-empty" class="muted">No reviews yet. End a chat to get one.</p>
+      </details>
     </section>
 
     <section id="screen-chat" class="screen" hidden>
@@ -27,20 +32,22 @@
         <p id="status" class="status"></p>
         <p class="keys"><kbd>Space</kbd> Thai · <kbd>Shift</kbd>+<kbd>Space</kbd> English · <kbd>←</kbd><kbd>→</kbd> word · <kbd>↑</kbd><kbd>↓</kbd> speed · <kbd>Enter</kbd> play/pause · <kbd>R</kbd> replay · <kbd>⌫</kbd> undo · <kbd>T</kbd> transcript · <kbd>E</kbd> English</p>
       </div>
-      <div id="player" class="player" hidden>
-        <div class="player-row">
-          <button id="btn-prev" type="button" title="Previous word (←)" aria-label="Previous word">⏮</button>
-          <button id="btn-play" type="button" title="Play / pause (Enter)" aria-label="Play or pause">▶</button>
-          <button id="btn-next" type="button" title="Next word (→)" aria-label="Next word">⏭</button>
-          <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Position in reply">
-          <span id="time" class="time">0.0s / 0.0s</span>
-        </div>
-        <div class="player-row">
-          <label class="speed">Speed
-            <input id="speed" type="range" min="0.1" max="2" step="0.05" value="1" aria-label="Speed">
-            <span id="speed-label">1.00×</span>
-          </label>
-          <label id="voice-picker" class="voice" hidden>Voice <select id="voice"></select></label>
+      <div id="chat-player-slot">
+        <div id="player" class="player" hidden>
+          <div class="player-row">
+            <button id="btn-prev" type="button" title="Previous word (←)" aria-label="Previous word">⏮</button>
+            <button id="btn-play" type="button" title="Play / pause (Enter)" aria-label="Play or pause">▶</button>
+            <button id="btn-next" type="button" title="Next word (→)" aria-label="Next word">⏭</button>
+            <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Position in clip">
+            <span id="time" class="time">0.0s / 0.0s</span>
+          </div>
+          <div class="player-row">
+            <label class="speed">Speed
+              <input id="speed" type="range" min="0.1" max="2" step="0.05" value="1" aria-label="Speed">
+              <span id="speed-label">1.00×</span>
+            </label>
+            <label id="voice-picker" class="voice" hidden>Voice <select id="voice"></select></label>
+          </div>
         </div>
       </div>
       <div class="controls">
@@ -51,6 +58,24 @@
         <button id="btn-end" type="button" class="end">End</button>
       </div>
       <div id="transcript" class="transcript" hidden></div>
+    </section>
+
+    <section id="screen-review" class="screen" hidden>
+      <header>
+        <h2 id="review-title">Review</h2>
+        <p id="review-summary" class="sub"></p>
+        <p class="muted small">Grammar and word choice only. Speech recognition can't judge pronunciation or tones.</p>
+        <p class="keys">Tap ▶ to hear a better version · <kbd>←</kbd><kbd>→</kbd> word · <kbd>↑</kbd><kbd>↓</kbd> speed · <kbd>Enter</kbd> play/pause · <kbd>R</kbd> replay</p>
+      </header>
+      <div id="review-player-slot"></div>
+      <div id="review-items" class="review-items"></div>
+      <div id="review-tips-block" class="tips">
+        <h3>Tips</h3>
+        <ul id="review-tips"></ul>
+      </div>
+      <div class="controls">
+        <button id="btn-review-done" type="button">Done</button>
+      </div>
     </section>
 
     <div id="notice" class="notice" hidden></div>

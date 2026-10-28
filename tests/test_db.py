@@ -76,3 +76,23 @@ def test_replace_facts_drops_duplicates_and_never_orphans_rows(db):
     assert [f.fact for f in db.replace_facts(["A.", "A.", "B."], source_session_id=None)] == ["A.", "B."]
     assert [f.fact for f in db.replace_facts(["C."], source_session_id=None)] == ["C."]
     assert [f.fact for f in db.list_facts()] == ["C."]
+
+
+def test_add_get_and_list_reviews(db):
+    from pood_thai.models import ReviewItem
+
+    s1 = db.create_session("food")
+    s2 = db.create_session("work")
+    assert db.session_topic(s1) == "food"
+    assert db.session_topic(999) is None
+    items = (
+        ReviewItem("ผมไปตลาดครับ", True),
+        ReviewItem("ซื้อมะม่วงสองครับ", False, "ซื้อมะม่วงสองลูกครับ", "Add the classifier ลูก after the number."),
+    )
+    r1 = db.add_review(s1, "food", items, ("Practise classifiers with numbers.",))
+    r2 = db.add_review(s2, "work", (), ())
+    assert r1.session_id == s1 and r1.topic == "food"
+    assert r1.items == items and r1.tips == ("Practise classifiers with numbers.",)
+    assert db.get_review(r1.id) == r1
+    assert db.get_review(999) is None
+    assert [r.id for r in db.list_reviews()] == [r2.id, r1.id]
