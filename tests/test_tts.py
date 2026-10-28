@@ -268,3 +268,10 @@ def test_azure_sdk_is_told_to_give_up_on_stalled_audio(monkeypatch):
     with pytest.raises(Stop):
         _azure_synthesize("k", "r", "<speak/>")
     assert ("frame-timeout", "10000") in calls
+
+
+def test_map_words_prefers_the_ssml_offset_over_the_first_text_match():
+    seg = Segment("มา มา", "th")
+    _, spans = build_ssml([seg], "premwadee")
+    boundaries = [Boundary("Word", "มา", spans[0].start + 3, 2, 0.4, 0.2)]
+    assert map_words(spans, boundaries) == (Word("thai", 3, 5, 0.4, 0.6),)
