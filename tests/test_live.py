@@ -10,7 +10,7 @@ from pood_thai.models import Segment
 from pood_thai.prompts import SESSION_START, build_system_prompt
 from pood_thai.stt import MlxWhisperTranscriber
 from pood_thai.topics import get_topic
-from pood_thai.tts import AzureSpeaker, SaySpeaker
+from pood_thai.tts import VOICES, AzureSpeaker, SaySpeaker
 from pood_thai.turns import parse_turn
 
 pytestmark = pytest.mark.live
@@ -28,15 +28,25 @@ async def test_whisper_transcribes_thai_speech(tmp_path):
 
 
 async def test_say_speaker_produces_wav():
-    audio = await SaySpeaker().synthesize([Segment("Tired is", "en"), Segment("เหนื่อยค่ะ", "th")], 0.9)
+    audio = await SaySpeaker().synthesize([Segment("Tired is", "en"), Segment("เหนื่อยค่ะ", "th")], "premwadee")
     assert audio.mime == "audio/wav" and len(audio.data) > 10_000
 
 
 @pytest.mark.skipif(not os.environ.get("AZURE_SPEECH_KEY"), reason="AZURE_SPEECH_KEY not set")
-async def test_azure_speaker_produces_mp3():
+async def test_azure_voices_return_wav_with_thai_word_timings():
     speaker = AzureSpeaker(os.environ["AZURE_SPEECH_KEY"], os.environ.get("AZURE_SPEECH_REGION", "southeastasia"))
-    audio = await speaker.synthesize([Segment("Tired is", "en"), Segment("เหนื่อยค่ะ", "th")], 0.9)
-    assert audio.mime == "audio/mpeg" and len(audio.data) > 5_000
+    segments = [
+        Segment("Tired is", "en", "note", 0),
+        Segment("เหนื่อย", "th", "note", 9),
+        Segment("วันนี้งานเยอะมากเหรอคะ", "th"),
+    ]
+    for voice in VOICES:
+        audio = await speaker.synthesize(segments, voice)
+        print(voice, len(audio.data), audio.words)
+        thai_words = [w for w in audio.words if w.part == "thai"]
+        assert audio.mime == "audio/wav" and len(audio.data) > 20_000
+        assert len(thai_words) >= 3, f"{voice}: no Thai word timings"
+        assert all(a.t_start <= b.t_start for a, b in zip(audio.words, audio.words[1:]))
 
 
 async def test_claude_opening_turn_is_valid_thai_json(tmp_path):

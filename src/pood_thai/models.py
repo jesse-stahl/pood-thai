@@ -8,6 +8,9 @@ from typing import Literal, Protocol
 Lang = Literal["th", "en"]
 Role = Literal["user", "assistant"]
 Action = Literal["reply", "repeat", "repeat_slower"]
+PartName = Literal["note", "thai"]
+
+DEFAULT_VOICE = "premwadee"
 
 
 @dataclass(frozen=True)
@@ -44,10 +47,23 @@ class Turn:
 
 @dataclass(frozen=True)
 class Segment:
-    """A piece of text to speak in one language."""
+    """A piece of text to speak in one language, and where it sits in the message (for word timings)."""
 
     text: str
     lang: Lang
+    part: PartName = "thai"
+    offset: int = 0  # index of `text` within the message's english_note (part "note") or thai (part "thai")
+
+
+@dataclass(frozen=True)
+class Word:
+    """One spoken word: its character range within a message part, and when it is heard (seconds)."""
+
+    part: PartName
+    start: int
+    end: int
+    t_start: float
+    t_end: float
 
 
 @dataclass(frozen=True)
@@ -55,6 +71,7 @@ class Audio:
     data: bytes
     mime: str
     fallback_used: bool = False
+    words: tuple[Word, ...] = ()
 
 
 class BrainError(Exception):
@@ -74,7 +91,7 @@ class Transcriber(Protocol):
 
 
 class Speaker(Protocol):
-    async def synthesize(self, segments: list[Segment], rate: float) -> Audio: ...
+    async def synthesize(self, segments: list[Segment], voice: str) -> Audio: ...
 
 
 class Chat(Protocol):

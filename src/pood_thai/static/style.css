@@ -69,3 +69,22 @@ kbd { font: inherit; font-size: 0.8rem; border: 1px solid var(--line); border-ra
   background: var(--fg); color: var(--bg); padding: 12px 18px; border-radius: 12px; font-size: 0.95rem;
 }
 .notice.error { background: var(--listen); color: #fff; }
+.player {
+  margin: 16px auto; max-width: 640px; display: flex; flex-direction: column; gap: 10px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+}
+.player-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.player-row button { padding: 6px 12px; }
+.player input[type="range"] { accent-color: var(--accent); }
+#scrub { flex: 1; min-width: 160px; }
+.time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; min-width: 96px; text-align: right; }
+.speed, .voice { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.9rem; }
+#speed-label { font-variant-numeric: tabular-nums; min-width: 48px; color: var(--fg); }
+.voice select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; }
+.word { cursor: pointer; border-radius: 4px; transition: background-color .1s; }
+.word:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.word.active { background: color-mix(in srgb, var(--speak) 35%, transparent); }
+.msg.current { border-color: var(--speak); }
+.peek-btn { display: none; padding: 2px 8px; font-size: 0.8rem; margin-top: 4px; }
+.transcript.hide-english .msg:not(.peek) .english { display: none; }
+.transcript.hide-english .peek-btn { display: inline-block; }

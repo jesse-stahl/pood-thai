@@ -11,7 +11,19 @@ from datetime import date
 from typing import Literal
 
 from pood_thai.db import Database
-from pood_thai.models import Audio, Brain, BrainError, Chat, Fact, Lang, Message, Segment, Speaker, Transcriber
+from pood_thai.models import (
+    DEFAULT_VOICE,
+    Audio,
+    Brain,
+    BrainError,
+    Chat,
+    Fact,
+    Lang,
+    Message,
+    Segment,
+    Speaker,
+    Transcriber,
+)
 from pood_thai.prompts import (
     MEMORY_SYSTEM_PROMPT,
     SESSION_START,
@@ -24,12 +36,13 @@ from pood_thai.turns import parse_facts, parse_turn
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_RATE = 0.9
-SLOW_RATE = 0.75
-
 
 class SessionNotFound(KeyError):
     """No live session with that id."""
+
+
+class MessageNotFound(KeyError):
+    """No reply from Ploy with that id in the session."""
 
 
 class NoSpeech(Exception):
@@ -40,7 +53,6 @@ class NoSpeech(Exception):
 class _LiveSession:
     session_id: int
     chat: Chat
-    rate: float = DEFAULT_RATE
     withdrawn: int = 0  # most recent user messages Claude must ignore, sent with the next message
     last_assistant: Message | None = None
     # One entry per user message Claude has seen: its stored message id, or None for a repeat request.
@@ -59,27 +71,32 @@ class TurnResult:
     kind: Literal["reply", "repeat"]
     user_message: Message | None
     assistant_message: Message | None
-    audio: Audio
+    audio: Audio | None  # None for "repeat": the browser replays the clip it already has
+    replay_message_id: int | None = None
 
 
 # Thai words (and the spaces between them) inside an English help note.
-_THAI_RUN = re.compile(r"[\u0e00-\u0e7f]+(?:\s+[\u0e00-\u0e7f]+)*")
+_THAI_RUN = re.compile(r"[฀-๿]+(?:\s+[฀-๿]+)*")
+
+
+def _note_piece(note: str, start: int, end: int, lang: Lang) -> Segment | None:
+    raw = note[start:end]
+    text = raw.strip()
+    if lang == "en" and not any(c.isalnum() for c in text):
+        return None
+    return Segment(text, lang, "note", start + len(raw) - len(raw.lstrip()))
 
 
 def _split_note(note: str) -> list[Segment]:
     """English voices skip Thai script, so give each Thai run in a note to the Thai voice."""
-    segments: list[Segment] = []
+    pieces: list[Segment | None] = []
     pos = 0
     for match in _THAI_RUN.finditer(note):
-        before = note[pos : match.start()].strip()
-        if any(c.isalnum() for c in before):
-            segments.append(Segment(before, "en"))
-        segments.append(Segment(match.group(), "th"))
+        pieces.append(_note_piece(note, pos, match.start(), "en"))
+        pieces.append(_note_piece(note, match.start(), match.end(), "th"))
         pos = match.end()
-    rest = note[pos:].strip()
-    if any(c.isalnum() for c in rest):
-        segments.append(Segment(rest, "en"))
-    return segments
+    pieces.append(_note_piece(note, pos, len(note), "en"))
+    return [p for p in pieces if p is not None]
 
 
 def speech_segments(message: Message) -> list[Segment]:
@@ -87,7 +104,7 @@ def speech_segments(message: Message) -> list[Segment]:
     if message.english_note:
         segments.extend(_split_note(message.english_note))
     if message.thai:
-        segments.append(Segment(message.thai, "th"))
+        segments.append(Segment(message.thai, "th", "thai", 0))
     return segments
 
 
@@ -114,15 +131,15 @@ class ConversationManager:
             raise SessionNotFound(session_id)
         return live
 
-    async def _speak(self, live: _LiveSession, message: Message) -> Audio:
-        return await self._speaker.synthesize(speech_segments(message), live.rate)
+    async def _speak(self, message: Message, voice: str) -> Audio:
+        return await self._speaker.synthesize(speech_segments(message), voice)
 
-    async def start(self, topic_id: str) -> StartResult:
+    async def start(self, topic_id: str, voice: str = DEFAULT_VOICE) -> StartResult:
         topic = get_topic(topic_id)
         async with self._start_lock:  # a double-clicked topic must not leave two live sessions
-            return await self._start(topic)
+            return await self._start(topic, voice)
 
-    async def _start(self, topic: Topic) -> StartResult:
+    async def _start(self, topic: Topic, voice: str) -> StartResult:
         await self._abandon_live_sessions()
         facts = [f.fact for f in self._db.list_facts()]
         chat = await self._brain.open_chat(build_system_prompt(topic, facts))
@@ -138,9 +155,11 @@ class ConversationManager:
             session_id, "assistant", "th", thai=turn.thai, english=turn.english, english_note=turn.english_note
         )
         live.last_assistant = message
-        return StartResult(session_id, message, await self._speak(live, message))
+        return StartResult(session_id, message, await self._speak(message, voice))
 
-    async def handle_audio(self, session_id: int, audio: bytes, suffix: str, lang: Lang) -> TurnResult:
+    async def handle_audio(
+        self, session_id: int, audio: bytes, suffix: str, lang: Lang, voice: str = DEFAULT_VOICE
+    ) -> TurnResult:
         live = self._get(session_id)
         text = await self._transcriber.transcribe(audio, suffix, lang)
         if not text:
@@ -152,11 +171,10 @@ class ConversationManager:
         turn = parse_turn(raw)
 
         if turn.action != "reply":
-            if turn.action == "repeat_slower":
-                live.rate = SLOW_RATE
+            # Slow-down and repeat requests both just replay; speed is the browser's slider.
             if live.last_assistant is None:
                 raise BrainError("Nothing to repeat yet")
-            return TurnResult("repeat", None, None, await self._speak(live, live.last_assistant))
+            return TurnResult("repeat", None, None, None, replay_message_id=live.last_assistant.id)
 
         if lang == "th":
             user = self._db.add_message(session_id, "user", "th", thai=text, english=turn.user_english)
@@ -167,15 +185,15 @@ class ConversationManager:
         )
         live.history[-1] = user.id
         live.last_assistant = assistant
-        return TurnResult("reply", user, assistant, await self._speak(live, assistant))
+        return TurnResult("reply", user, assistant, await self._speak(assistant, voice))
 
-    async def replay(self, session_id: int, slow: bool) -> Audio:
-        live = self._get(session_id)
-        if slow:
-            live.rate = SLOW_RATE
-        if live.last_assistant is None:
-            raise BrainError("Nothing to replay yet")
-        return await self._speak(live, live.last_assistant)
+    async def speak(self, session_id: int, message_id: int, voice: str) -> Audio:
+        """Re-render one of Ploy's replies in this session, e.g. in another voice."""
+        self._get(session_id)
+        for message in self._db.list_messages(session_id):
+            if message.id == message_id and message.role == "assistant":
+                return await self._speak(message, voice)
+        raise MessageNotFound(message_id)
 
     async def undo(self, session_id: int) -> list[int]:
         live = self._get(session_id)

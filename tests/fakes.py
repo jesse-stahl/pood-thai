@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from pood_thai.models import Audio, Lang, Segment
+from pood_thai.models import Audio, Lang, Segment, Word
 
 
 class FakeTranscriber:
@@ -18,12 +18,17 @@ class FakeTranscriber:
 
 
 class FakeSpeaker:
-    def __init__(self) -> None:
-        self.calls: list[tuple[list[Segment], float]] = []
+    """Speaks each segment as one 'word' lasting 0.5 s, so word timings flow through like Azure's."""
 
-    async def synthesize(self, segments: list[Segment], rate: float) -> Audio:
-        self.calls.append((list(segments), rate))
-        return Audio(data=("AUDIO:" + "|".join(s.text for s in segments)).encode(), mime="audio/mpeg")
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[Segment], str]] = []
+
+    async def synthesize(self, segments: list[Segment], voice: str) -> Audio:
+        self.calls.append((list(segments), voice))
+        words = tuple(
+            Word(s.part, s.offset, s.offset + len(s.text), i * 0.5, i * 0.5 + 0.5) for i, s in enumerate(segments)
+        )
+        return Audio(data=("AUDIO:" + "|".join(s.text for s in segments)).encode(), mime="audio/mpeg", words=words)
 
 
 class FakeChat:

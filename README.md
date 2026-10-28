@@ -15,11 +15,15 @@ A voice-only Thai conversation partner that runs on your Mac. Hold Space and spe
 |---|---|
 | Hold **Space** | Speak Thai |
 | Hold **Shift+Space** | Ask in English ("how do I say tired?") |
-| **R** | Replay the last reply |
+| **← / →** | Jump to the previous / next word and keep playing |
+| **↑ / ↓** | Speed up / slow down (0.1× to 2×) |
+| **Enter** | Play / pause |
+| **R** | Replay the current reply |
 | **Backspace** | Undo your last turn (if it misheard you) |
-| **T** | Show or hide the transcript (Thai + English) |
+| **T** | Show or hide the transcript |
+| **E** | Hide or show the English translations (tap "Show English" on one line to peek) |
 
-Say **ช้าๆ หน่อย** to slow down, or **อีกครั้ง** to hear it again. Click **End** when you're done, and Ploy will remember the important things for next time ("What I remember" on the start screen lets you delete facts).
+The player under Ploy's face has a scrubber, a speed slider and a voice picker (Premwadee, Achara, Niwat or Ava; needs the Azure key). Click any word in Ploy's lines of the transcript to hear it from there. Say **ช้าๆ หน่อย** or **อีกครั้ง** to hear the reply again. Click **End** when you're done, and Ploy will remember the important things for next time ("What I remember" on the start screen lets you delete facts).
 
 Replies take a few seconds because Claude runs through your Claude Code subscription.
 

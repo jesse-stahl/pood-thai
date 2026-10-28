@@ -47,6 +47,7 @@ def test_start_session_returns_message_and_audio(make_client):
         assert body["message"] == {"id": 1, "role": "assistant", "lang": "th", "thai": "สวัสดีค่ะ", "english": "Hello", "english_note": ""}
         assert base64.b64decode(body["audio_b64"]) == "AUDIO:สวัสดีค่ะ".encode()
         assert body["audio_mime"] == "audio/mpeg"
+        assert body["words"] == [{"part": "thai", "start": 0, "end": 9, "t_start": 0.0, "t_end": 0.5}]
         assert body["fallback_voice"] is False
 
 
@@ -75,6 +76,7 @@ def test_turn_repeat_has_null_messages(make_client):
         sid = _start(client)["session_id"]
         body = client.post(f"/api/sessions/{sid}/turns", files={"audio": ("r.mp4", b"x", "audio/mp4")}, data={"lang": "th"}).json()
         assert body["kind"] == "repeat" and body["user_message"] is None and body["assistant_message"] is None
+        assert body["replay_message_id"] == 1 and body["audio_b64"] is None and body["words"] == []
 
 
 def test_turn_errors(make_client):
@@ -98,7 +100,8 @@ def test_replay_undo_end_and_memory(make_client):
     )
     with client:
         sid = _start(client)["session_id"]
-        assert "audio_b64" in client.post(f"/api/sessions/{sid}/replay", json={"slow": True}).json()
+        speech = client.post(f"/api/sessions/{sid}/messages/1/speech", json={"voice": "achara"}).json()
+        assert speech["audio_b64"] and speech["words"][0]["part"] == "thai"
         turn = client.post(f"/api/sessions/{sid}/turns", files={"audio": ("r.webm", b"x", "audio/webm")}, data={"lang": "th"}).json()
         assert client.post(f"/api/sessions/{sid}/undo").json() == {"removed_ids": [turn["user_message"]["id"], turn["assistant_message"]["id"]]}
         db.add_message(sid, "user", "th", thai="มีแมว", english="I have a cat")
@@ -140,3 +143,38 @@ async def test_safe_warm_up_logs_instead_of_raising(caplog):
 
     await safe_warm_up(Broken())
     assert "ffmpeg" in caplog.text
+
+
+def test_voices_endpoint_without_azure_is_empty(make_client):
+    client, _ = make_client([OPENING])
+    with client:
+        assert client.get("/api/voices").json() == {"voices": [], "default": "premwadee", "word_timing": False}
+
+
+def test_voice_catalog_validates_and_passes_voices_through(tmp_path):
+    from pood_thai.tts import VOICES
+
+    db = Database(tmp_path / "v.sqlite3")
+    speaker = FakeSpeaker()
+    manager = ConversationManager(
+        db, FakeBrain([[OPENING, reply_json(thai="ดีค่ะ")]]), FakeTranscriber(["สบายดี"]), speaker,
+        today=lambda: "2026-10-26",
+    )
+    client = TestClient(create_app(manager, db, voices=list(VOICES.values())), base_url="http://127.0.0.1:8765")
+    with client:
+        body = client.get("/api/voices").json()
+        assert body["default"] == "premwadee" and body["word_timing"] is True
+        assert {"id": "achara", "label": VOICES["achara"].label} in body["voices"]
+        r = client.post("/api/sessions", json={"topic": "day", "voice": "nope"})
+        assert r.status_code == 400 and r.json()["error"] == "bad_request"
+        sid = client.post("/api/sessions", json={"topic": "day", "voice": "niwat"}).json()["session_id"]
+        assert speaker.calls[-1][1] == "niwat"
+        files = {"audio": ("r.webm", b"x", "audio/webm")}
+        r = client.post(f"/api/sessions/{sid}/turns", files=files, data={"lang": "th", "voice": "nope"})
+        assert r.status_code == 400
+        r = client.post(f"/api/sessions/{sid}/turns", files=files, data={"lang": "th", "voice": "achara"})
+        assert r.status_code == 200 and speaker.calls[-1][1] == "achara"
+        r = client.post(f"/api/sessions/{sid}/messages/999/speech", json={"voice": "achara"})
+        assert r.status_code == 404 and r.json()["error"] == "message_not_found"
+        r = client.post(f"/api/sessions/{sid}/messages/1/speech", json={"voice": "ava-multi"})
+        assert r.status_code == 200 and speaker.calls[-1][1] == "ava-multi"
