@@ -41,6 +41,7 @@ const state = {
   voices: [],
   defaultVoice: "premwadee",
   currentId: null, // Ploy's message loaded in the player
+  currentVoiceKey: null, // voice of the clip actually loaded (the picker may have moved on)
   activeWord: -1,
   scrubbing: false,
 };
@@ -50,6 +51,8 @@ let mediaStream = null;
 let recorder = null;
 let noticeTimer = null;
 let rafId = 0;
+// Bumped whenever the player is pointed at something; a clip request that resolves late compares against it.
+let selection = 0;
 const player = new Audio();
 player.preservesPitch = true;
 
@@ -148,7 +151,8 @@ function storeClip(messageId, payload, key = voiceKey()) {
   const byVoice = clips.get(messageId);
   const old = byVoice.get(key);
   if (old) URL.revokeObjectURL(old.url);
-  byVoice.set(key, { url, words: payload.words || [] });
+  // Mac-fallback clips are kept so they can play now, but marked so the next open retries the real voice.
+  byVoice.set(key, { url, words: payload.words || [], fallback: Boolean(payload.fallback_voice) });
 }
 
 function dropClips(messageId) {
@@ -157,7 +161,7 @@ function dropClips(messageId) {
 }
 
 const clipFor = (messageId) => clips.get(messageId)?.get(voiceKey()) ?? null;
-const currentWords = () => clipFor(state.currentId)?.words ?? [];
+const currentWords = () => clips.get(state.currentId)?.get(state.currentVoiceKey)?.words ?? [];
 
 function clearActiveWord() {
   document.querySelectorAll(".word.active").forEach((el) => el.classList.remove("active"));
@@ -168,6 +172,8 @@ function loadClip(messageId, { autoplay = true, at = 0 } = {}) {
   const clip = clipFor(messageId);
   if (!clip) return false;
   state.currentId = messageId;
+  state.currentVoiceKey = voiceKey();
+  selection += 1;
   clearActiveWord();
   if (player.src !== clip.url) player.src = clip.url;
   // Chrome resets playbackRate to defaultPlaybackRate when a new source loads.
@@ -185,7 +191,8 @@ function loadClip(messageId, { autoplay = true, at = 0 } = {}) {
 const pendingClips = new Map(); // `${messageId}|${voice key}` -> in-flight ensureClip promise
 
 function ensureClip(messageId) {
-  if (clipFor(messageId)) return Promise.resolve(true);
+  const cached = clipFor(messageId);
+  if (cached && !cached.fallback) return Promise.resolve(true);
   // A second request for the same clip (e.g. R pressed while a voice switch loads) shares the first one,
   // so it doesn't revoke the URL the player is already using.
   const pendingKey = `${messageId}|${voiceKey()}`;
@@ -201,20 +208,24 @@ async function fetchClip(messageId) {
   const key = voiceKey();
   try {
     const res = await postJson(`/api/sessions/${session}/messages/${messageId}/speech`, { voice: requestVoice() });
-    if (state.sessionId !== session) return false; // the session ended while this was in flight
+    // The session ended, or undo removed this reply, while the request was in flight.
+    if (state.sessionId !== session || !messages.has(messageId)) return false;
     storeClip(messageId, res, key);
     renderWords(messageId);
     return Boolean(clipFor(messageId));
   } catch (err) {
     showNotice(errorText(err), "error");
-    return false;
+    return Boolean(clipFor(messageId)); // a fallback clip can still play
   }
 }
 
 async function openMessage(messageId, at = 0) {
   if (state.recording) return;
-  // Re-check after the fetch: a recording may have started meanwhile, and playing now would leak into the mic.
-  if (await ensureClip(messageId) && !state.recording) loadClip(messageId, { autoplay: true, at });
+  const mine = ++selection;
+  const ready = await ensureClip(messageId);
+  // Re-check after the fetch: a recording may have started (playing would leak into the mic), the reply may have
+  // been undone, or the user may have picked something else meanwhile.
+  if (ready && !state.recording && mine === selection && messages.has(messageId)) loadClip(messageId, { autoplay: true, at });
 }
 
 function play() {
@@ -248,7 +259,9 @@ function stepWords(dir) {
   if (state.currentId === null || state.recording) return;
   const words = currentWords();
   if (words.length) {
-    player.currentTime = words[stepWord(words, player.currentTime, dir)].t_start;
+    const i = stepWord(words, player.currentTime, dir);
+    if (i < 0) return;
+    player.currentTime = words[i].t_start;
   } else {
     const duration = Number.isFinite(player.duration) ? player.duration : 0;
     player.currentTime = Math.max(0, Math.min(duration, player.currentTime + dir * NO_TIMING_SEEK_S));
@@ -260,11 +273,12 @@ function stepWords(dir) {
 async function seekToWord(messageId, word) {
   if (state.recording) return;
   // The line may have been rendered from another voice's clip, so fetch this voice's and match by position.
-  if (!(await ensureClip(messageId)) || state.recording) return;
+  const mine = ++selection;
+  if (!(await ensureClip(messageId)) || state.recording || mine !== selection || !messages.has(messageId)) return;
   const words = clipFor(messageId).words;
   const match = words.find((w) => w.part === word.part && w.end > word.start);
   const at = match?.t_start ?? 0;
-  if (messageId === state.currentId) {
+  if (messageId === state.currentId && state.currentVoiceKey === voiceKey()) {
     player.currentTime = at;
     if (player.paused) play();
     refreshPlayer();
@@ -308,7 +322,7 @@ function tick() {
 }
 
 player.addEventListener("play", () => {
-  setStatus("speaking");
+  if (!state.busy && !state.recording) setStatus("speaking");
   cancelAnimationFrame(rafId);
   rafId = requestAnimationFrame(tick);
 });
@@ -364,7 +378,7 @@ function renderWords(messageId) {
   if (!message || !row || message.role !== "assistant") return;
   // Fall back to any voice's timings so lines stay clickable after a voice switch; a click fetches the new voice.
   const byVoice = clips.get(messageId);
-  const clip = clipFor(messageId) ?? [...(byVoice?.values() ?? [])].find((c) => c.words.length);
+  const clip = [clipFor(messageId), ...(byVoice?.values() ?? [])].find((c) => c?.words.length);
   const words = clip?.words ?? [];
   for (const line of row.querySelectorAll("p[data-part]")) {
     const part = line.dataset.part;

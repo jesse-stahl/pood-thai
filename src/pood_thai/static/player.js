@@ -33,22 +33,25 @@ export function wordIndexAt(words, t) {
 export function stepWord(words, t, dir) {
   if (!words.length) return -1;
   const i = wordIndexAt(words, t);
-  if (dir > 0) return Math.min(words.length - 1, i + 1);
+  if (dir > 0) return i + 1 < words.length ? i + 1 : -1; // nothing after the last word
   if (i < 0) return 0;
   return t - words[i].t_start > RESTART_WORD_AFTER_S ? i : Math.max(0, i - 1);
 }
 
 /** Split text into pieces; pieces covering one of this part's words carry its index in `words`. */
 export function splitByWords(text, words, part) {
+  // Offsets count Unicode code points (Python string indices), not UTF-16 units, so slice by code point.
+  const chars = Array.from(text);
+  const slice = (start, end) => chars.slice(start, end).join("");
   const pieces = [];
   let pos = 0;
   words.forEach((w, i) => {
-    if (w.part !== part || w.start < pos || w.end > text.length || w.end <= w.start) return;
-    if (w.start > pos) pieces.push({ text: text.slice(pos, w.start), word: null });
-    pieces.push({ text: text.slice(w.start, w.end), word: i });
+    if (w.part !== part || w.start < pos || w.end > chars.length || w.end <= w.start) return;
+    if (w.start > pos) pieces.push({ text: slice(pos, w.start), word: null });
+    pieces.push({ text: slice(w.start, w.end), word: i });
     pos = w.end;
   });
-  if (pos < text.length) pieces.push({ text: text.slice(pos), word: null });
+  if (pos < chars.length) pieces.push({ text: slice(pos), word: null });
   return pieces;
 }
 
