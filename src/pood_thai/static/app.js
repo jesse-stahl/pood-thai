@@ -303,7 +303,8 @@ async function seekToWord(key, word) {
   const words = clipFor(key).words;
   const match = words.find((w) => w.part === word.part && w.end > word.start);
   const at = match?.t_start ?? 0;
-  if (key === state.currentKey && state.currentVoiceKey === voiceKey()) {
+  // Seek in place only if the player still holds this exact clip (a voice switch or a re-fetched fallback replaces it).
+  if (key === state.currentKey && player.src === clipFor(key).url) {
     player.currentTime = at;
     if (player.paused) play();
     refreshPlayer();
