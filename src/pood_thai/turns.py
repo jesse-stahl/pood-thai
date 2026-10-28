@@ -76,6 +76,15 @@ def _unspaced(text: str) -> str:
     return "".join(text.split())
 
 
+def _item_number(value: object) -> int | None:
+    # bool is an int subclass, so check the exact type; models sometimes send numbers as strings.
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return None
+
+
 def parse_review(raw: str, sentences: list[str]) -> tuple[tuple[ReviewItem, ...], tuple[str, ...]]:
     """One item per learner sentence (matched by number); anything unclear counts as ok."""
     data = extract_json_object(raw)
@@ -83,7 +92,10 @@ def parse_review(raw: str, sentences: list[str]) -> tuple[tuple[ReviewItem, ...]
     if not isinstance(entries, list):
         raise TurnParseError("'items' is not a list")
     # type() rather than isinstance(): JSON true would otherwise count as sentence 1.
-    by_number = {e["n"]: e for e in entries if isinstance(e, dict) and type(e.get("n")) is int}
+    by_number = {n: e for e in entries if isinstance(e, dict) and (n := _item_number(e.get("n"))) is not None}
+    if sentences and not any(n in by_number for n in range(1, len(sentences) + 1)):
+        # Nothing lines up with the numbered sentences, so this isn't a review; don't pass it off as "all natural".
+        raise TurnParseError("Review items don't match any sentence number")
     items: list[ReviewItem] = []
     for n, said in enumerate(sentences, start=1):
         entry = by_number.get(n, {})

@@ -98,3 +98,16 @@ def test_parse_review_ignores_spacing_only_changes_and_boolean_numbers():
     raw = '{"items": [{"n": true, "ok": false, "better": "x", "why": "?"}, {"n": 2, "ok": false, "better": "ไปตลาดครับ"}]}'
     items, _ = parse_review(raw, ["ก", "ไป ตลาด ครับ"])
     assert items == (ReviewItem("ก", True), ReviewItem("ไป ตลาด ครับ", True))
+
+
+def test_parse_review_accepts_numbers_sent_as_strings():
+    raw = '{"items": [{"n": "1", "ok": false, "better": "ซื้อมะม่วงสองลูกครับ", "why": "Add ลูก."}], "tips": []}'
+    items, _ = parse_review(raw, ["ซื้อมะม่วงสองครับ"])
+    assert items == (ReviewItem("ซื้อมะม่วงสองครับ", False, "ซื้อมะม่วงสองลูกครับ", "Add ลูก."),)
+
+
+def test_parse_review_fails_when_no_entry_matches_a_sentence():
+    for raw in ('{"items": [], "tips": []}', '{"items": [{"ok": false, "better": "x"}]}', '{"items": [{"n": 0, "ok": true}]}'):
+        with pytest.raises(TurnParseError):
+            parse_review(raw, ["ก", "ข"])
+    assert parse_review('{"items": [], "tips": []}', []) == ((), ())
