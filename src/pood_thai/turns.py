@@ -80,7 +80,7 @@ def _item_number(value: object) -> int | None:
     # bool is an int subclass, so check the exact type; models sometimes send numbers as strings.
     if type(value) is int:
         return value
-    if isinstance(value, str) and value.strip().isdecimal():  # isdecimal: int() accepts it (incl. Thai ๑); isdigit doesn't
+    if isinstance(value, str) and len(value.strip()) <= 6 and value.strip().isdecimal():  # isdecimal: int() accepts it (incl. Thai ๑); isdigit doesn't
         return int(value)
     return None
 

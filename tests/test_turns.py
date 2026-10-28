@@ -126,3 +126,8 @@ def test_parse_review_ignores_digit_like_symbols_and_reads_thai_digits():
         parse_review('{"items": [{"n": "²", "ok": true}]}', ["ก"])
     items, _ = parse_review('{"items": [{"n": "๑", "ok": false, "better": "ข", "why": "y"}]}', ["ก"])
     assert items == (ReviewItem("ก", False, "ข", "y"),)
+
+
+def test_parse_review_rejects_absurdly_long_item_numbers():
+    with pytest.raises(TurnParseError):
+        parse_review('{"items": [{"n": "' + "1" * 5000 + '", "ok": true}]}', ["ก"])
