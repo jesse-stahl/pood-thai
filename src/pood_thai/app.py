@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from pood_thai.brain import AgentSdkBrain
 from pood_thai.config import Settings
-from pood_thai.conversation import ConversationManager, MessageNotFound, NoSpeech, SessionNotFound
+from pood_thai.conversation import ConversationManager, MessageNotFound, NoSpeech, ReviewNotFound, SessionNotFound
 from pood_thai.db import Database
 from pood_thai.models import (
     DEFAULT_VOICE,
@@ -24,6 +24,7 @@ from pood_thai.models import (
     BrainError,
     Fact,
     Message,
+    Review,
     Speaker,
     SpeechError,
     TranscriptionError,
@@ -68,6 +69,33 @@ def message_json(message: Message | None) -> dict | None:
 
 def fact_json(fact: Fact) -> dict:
     return {"id": fact.id, "fact": fact.fact}
+
+
+def _topic_label(topic_id: str) -> str:
+    return next((t.label for t in TOPICS if t.id == topic_id), topic_id)
+
+
+def review_json(review: Review) -> dict:
+    return {
+        "id": review.id,
+        "session_id": review.session_id,
+        "topic": review.topic,
+        "topic_label": _topic_label(review.topic),
+        "created_at": review.created_at,
+        "items": [{"said": i.said, "ok": i.ok, "better": i.better, "why": i.why} for i in review.items],
+        "tips": list(review.tips),
+    }
+
+
+def review_summary_json(review: Review) -> dict:
+    return {
+        "id": review.id,
+        "topic": review.topic,
+        "topic_label": _topic_label(review.topic),
+        "created_at": review.created_at,
+        "total": len(review.items),
+        "fixes": sum(1 for i in review.items if not i.ok),
+    }
 
 
 def audio_json(audio: Audio | None) -> dict:
@@ -131,6 +159,10 @@ def create_app(
     @app.exception_handler(MessageNotFound)
     async def _message_not_found(_: Request, exc: MessageNotFound):
         return _error(404, "message_not_found", f"No reply {exc} in this session")
+
+    @app.exception_handler(ReviewNotFound)
+    async def _review_not_found(_: Request, exc: ReviewNotFound):
+        return _error(404, "review_not_found", f"No review item {exc}")
 
     @app.exception_handler(NoSpeech)
     async def _no_speech(_: Request, exc: NoSpeech):
@@ -204,7 +236,26 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/end")
     async def end(session_id: int):
-        return {"facts": [fact_json(f) for f in await manager.end(session_id)]}
+        result = await manager.end(session_id)
+        return {
+            "facts": [fact_json(f) for f in result.facts],
+            "review": review_json(result.review) if result.review else None,
+        }
+
+    @app.get("/api/reviews")
+    async def list_reviews():
+        return {"reviews": [review_summary_json(r) for r in db.list_reviews()]}
+
+    @app.get("/api/reviews/{review_id}")
+    async def get_review(review_id: int):
+        review = db.get_review(review_id)
+        if review is None:
+            raise ReviewNotFound(review_id)
+        return review_json(review)
+
+    @app.post("/api/reviews/{review_id}/items/{index}/speech")
+    async def review_speech(review_id: int, index: int, body: SpeechRequest):
+        return audio_json(await manager.speak_review(review_id, index, check_voice(body.voice)))
 
     @app.get("/api/memory")
     async def memory():

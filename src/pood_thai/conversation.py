@@ -20,19 +20,23 @@ from pood_thai.models import (
     Fact,
     Lang,
     Message,
+    Review,
     Segment,
     Speaker,
     Transcriber,
 )
 from pood_thai.prompts import (
     MEMORY_SYSTEM_PROMPT,
+    REVIEW_SYSTEM_PROMPT,
     SESSION_START,
     build_memory_request,
+    build_review_request,
     build_system_prompt,
     format_user_message,
+    review_sentences,
 )
 from pood_thai.topics import Topic, get_topic
-from pood_thai.turns import parse_facts, parse_turn
+from pood_thai.turns import parse_facts, parse_review, parse_turn
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,10 @@ class SessionNotFound(KeyError):
 
 class MessageNotFound(KeyError):
     """No reply from Ploy with that id in the session."""
+
+
+class ReviewNotFound(KeyError):
+    """No saved review item with a better version at that id/index."""
 
 
 class NoSpeech(Exception):
@@ -64,6 +72,12 @@ class StartResult:
     session_id: int
     message: Message
     audio: Audio
+
+
+@dataclass(frozen=True)
+class EndResult:
+    facts: list[Fact]
+    review: Review | None  # None when there were no Thai turns or the review call failed
 
 
 @dataclass(frozen=True)
@@ -207,7 +221,7 @@ class ConversationManager:
             live.last_assistant = assistants[-1] if assistants else None
         return removed
 
-    async def end(self, session_id: int) -> list[Fact]:
+    async def end(self, session_id: int) -> EndResult:
         live = self._get(session_id)
         del self._live[session_id]
         await live.chat.close()
@@ -215,7 +229,15 @@ class ConversationManager:
         messages = self._db.list_messages(session_id)
         current = self._db.list_facts()
         if not any(m.role == "user" for m in messages):
-            return current
+            return EndResult(current, None)
+        # Independent calls, so run them together; each handles its own failure.
+        facts, review = await asyncio.gather(
+            self._update_memory(session_id, messages, current),
+            self._make_review(session_id, messages),
+        )
+        return EndResult(facts, review)
+
+    async def _update_memory(self, session_id: int, messages: list[Message], current: list[Fact]) -> list[Fact]:
         try:
             raw = await self._brain.complete(
                 MEMORY_SYSTEM_PROMPT,
@@ -229,6 +251,25 @@ class ConversationManager:
             logger.warning("Memory extraction returned no facts; keeping existing facts")
             return current
         return self._db.replace_facts(facts, source_session_id=session_id)
+
+    async def _make_review(self, session_id: int, messages: list[Message]) -> Review | None:
+        sentences = review_sentences(messages)
+        if not sentences:
+            return None
+        try:
+            raw = await self._brain.complete(REVIEW_SYSTEM_PROMPT, build_review_request(messages))
+            items, tips = parse_review(raw, sentences)
+        except BrainError:
+            logger.warning("Review failed; ending without one", exc_info=True)
+            return None
+        return self._db.add_review(session_id, self._db.session_topic(session_id) or "", items, tips)
+
+    async def speak_review(self, review_id: int, index: int, voice: str) -> Audio:
+        """Speak a saved review item's better version (only items that have one)."""
+        review = self._db.get_review(review_id)
+        if review is None or not 0 <= index < len(review.items) or review.items[index].ok:
+            raise ReviewNotFound(f"{review_id}/{index}")
+        return await self._speaker.synthesize([Segment(review.items[index].better, "th", "thai", 0)], voice)
 
     async def _abandon_live_sessions(self) -> None:
         for session_id, live in list(self._live.items()):

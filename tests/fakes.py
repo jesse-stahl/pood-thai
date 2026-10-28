@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from pood_thai.models import Audio, Lang, Segment, Word
 
@@ -48,7 +49,7 @@ class FakeChat:
 class FakeBrain:
     """open_chat() returns a fresh FakeChat per call, fed from `chat_replies` in order."""
 
-    def __init__(self, chat_replies: list[list[str]], completion: str = '{"facts": []}'):
+    def __init__(self, chat_replies: list[list[str]], completion: "str | Callable[[str, str], str]" = '{"facts": []}'):
         self._chat_replies = list(chat_replies)
         self.chats: list[FakeChat] = []
         self.system_prompts: list[str] = []
@@ -63,7 +64,8 @@ class FakeBrain:
 
     async def complete(self, system_prompt: str, message: str) -> str:
         self.complete_calls.append((system_prompt, message))
-        return self.completion
+        # A callable completion answers per prompt (e.g. memory vs review) instead of one fixed reply.
+        return self.completion(system_prompt, message) if callable(self.completion) else self.completion
 
 
 def reply_json(

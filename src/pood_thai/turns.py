@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pood_thai.models import BrainError, Turn
+from pood_thai.models import BrainError, ReviewItem, Turn
 
 _ACTIONS = ("reply", "repeat", "repeat_slower")
 MAX_FACTS = 30
+MAX_TIPS = 2
 
 
 class TurnParseError(BrainError):
@@ -69,3 +70,24 @@ def parse_facts(raw: str) -> list[str]:
     if facts and not cleaned:
         raise TurnParseError("'facts' has no valid entries")
     return cleaned[:MAX_FACTS]
+
+
+def parse_review(raw: str, sentences: list[str]) -> tuple[tuple[ReviewItem, ...], tuple[str, ...]]:
+    """One item per learner sentence (matched by number); anything unclear counts as ok."""
+    data = extract_json_object(raw)
+    entries = data.get("items")
+    if not isinstance(entries, list):
+        raise TurnParseError("'items' is not a list")
+    by_number = {e["n"]: e for e in entries if isinstance(e, dict) and isinstance(e.get("n"), int)}
+    items: list[ReviewItem] = []
+    for n, said in enumerate(sentences, start=1):
+        entry = by_number.get(n, {})
+        better = _text(entry, "better")
+        why = _text(entry, "why")
+        if entry.get("ok") is False and better and better != said.strip():
+            items.append(ReviewItem(said, False, better, why))
+        else:
+            items.append(ReviewItem(said, True))
+    raw_tips = data.get("tips")
+    tips = [t.strip() for t in raw_tips if isinstance(t, str) and t.strip()] if isinstance(raw_tips, list) else []
+    return tuple(items), tuple(tips[:MAX_TIPS])

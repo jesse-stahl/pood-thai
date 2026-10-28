@@ -1,7 +1,7 @@
 import pytest
 
-from pood_thai.models import BrainError, Turn
-from pood_thai.turns import TurnParseError, parse_facts, parse_turn
+from pood_thai.models import BrainError, ReviewItem, Turn
+from pood_thai.turns import TurnParseError, parse_facts, parse_review, parse_turn
 
 FULL = '{"action": "reply", "user_english": "I am tired", "english_note": "", "thai": "เหนื่อยเหรอคะ", "english": "Tired?"}'
 
@@ -63,3 +63,32 @@ def test_parse_facts_with_only_invalid_entries_is_an_error_not_an_empty_list():
     with pytest.raises(TurnParseError):
         parse_facts('{"facts": [null, 42, {}]}')
     assert parse_facts('{"facts": []}') == []
+
+
+def test_parse_review_maps_items_by_number_and_keeps_the_learners_text():
+    sentences = ["ไปตลาดครับ", "ซื้อมะม่วงสองครับ", "อร่อยครับ"]
+    raw = (
+        '{"items": [{"n": 2, "ok": false, "better": "ซื้อมะม่วงสองลูกครับ", "why": "Add the classifier ลูก."},'
+        ' {"n": 1, "ok": true}], "tips": ["Use classifiers with numbers.", "Nice job!", "extra"]}'
+    )
+    items, tips = parse_review(raw, sentences)
+    assert items == (
+        ReviewItem("ไปตลาดครับ", True),
+        ReviewItem("ซื้อมะม่วงสองครับ", False, "ซื้อมะม่วงสองลูกครับ", "Add the classifier ลูก."),
+        ReviewItem("อร่อยครับ", True),
+    )
+    assert tips == ("Use classifiers with numbers.", "Nice job!")
+
+
+def test_parse_review_treats_fixes_without_a_new_version_as_ok():
+    raw = '{"items": [{"n": 1, "ok": false, "better": ""}, {"n": 2, "ok": false, "better": "เหมือนเดิม"}], "tips": "nope"}'
+    items, tips = parse_review(raw, ["ก", "เหมือนเดิม"])
+    assert items == (ReviewItem("ก", True), ReviewItem("เหมือนเดิม", True))
+    assert tips == ()
+
+
+def test_parse_review_rejects_garbage():
+    with pytest.raises(TurnParseError):
+        parse_review("no json here", ["ก"])
+    with pytest.raises(TurnParseError):
+        parse_review('{"items": "x"}', ["ก"])

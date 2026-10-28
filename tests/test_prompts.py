@@ -3,11 +3,14 @@ import pytest
 from pood_thai.models import Message
 from pood_thai.prompts import (
     MEMORY_SYSTEM_PROMPT,
+    REVIEW_SYSTEM_PROMPT,
     SESSION_START,
     UNDO_NOTE,
     build_memory_request,
+    build_review_request,
     build_system_prompt,
     format_user_message,
+    review_sentences,
 )
 from pood_thai.topics import TOPICS, get_topic
 
@@ -70,3 +73,30 @@ def test_memory_request_includes_date_facts_and_transcript():
 
 def test_memory_system_prompt_requires_facts_json():
     assert '{"facts"' in MEMORY_SYSTEM_PROMPT
+
+
+def test_system_prompt_does_not_ask_ploy_to_correct_or_repeat_the_user():
+    prompt = build_system_prompt(get_topic("day"), [])
+    assert "recast" not in prompt.lower()
+    assert "Do not repeat, rephrase or correct what they said" in prompt
+
+
+def test_review_request_numbers_only_the_learners_thai_sentences():
+    messages = [
+        _msg("assistant", thai="วันนี้ทำอะไรคะ"),
+        _msg("user", thai="ไปตลาดครับ"),
+        _msg("user", english="how do I say mango", lang="en"),
+        _msg("assistant", thai="มะม่วงค่ะ", english_note="Mango is มะม่วง."),
+        _msg("user", thai="ซื้อมะม่วงครับ"),
+    ]
+    text = build_review_request(messages)
+    assert "Ploy: วันนี้ทำอะไรคะ" in text
+    assert "[1] Learner: ไปตลาดครับ" in text
+    assert "Learner (asking in English): how do I say mango" in text
+    assert "[2] Learner: ซื้อมะม่วงครับ" in text
+    assert review_sentences(messages) == ["ไปตลาดครับ", "ซื้อมะม่วงครับ"]
+
+
+def test_review_system_prompt_sets_the_json_contract():
+    assert '"items"' in REVIEW_SYSTEM_PROMPT and '"tips"' in REVIEW_SYSTEM_PROMPT
+    assert "pronunciation" in REVIEW_SYSTEM_PROMPT

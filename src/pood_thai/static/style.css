@@ -88,3 +88,21 @@ kbd { font: inherit; font-size: 0.8rem; border: 1px solid var(--line); border-ra
 .peek-btn { display: none; padding: 2px 8px; font-size: 0.8rem; margin-top: 4px; }
 .transcript.hide-english .msg:not(.peek) .english { display: none; }
 .transcript.hide-english .peek-btn { display: inline-block; }
+.reviews { margin-top: 12px; }
+.reviews ul { display: flex; flex-direction: column; gap: 6px; }
+.reviews li { border-top: none; padding: 0; }
+.reviews li button { width: 100%; text-align: left; }
+.small { font-size: 0.85rem; }
+.review-items { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; }
+.review-item { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
+.review-item.current { border-color: var(--speak); }
+.review-item .said { margin: 0; font-size: 1.05rem; }
+.review-item.ok .said { color: var(--muted); }
+.review-item.fix .said { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--listen) 60%, transparent); }
+.better-line { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.better-line .better { margin: 0; font-size: 1.2rem; }
+.play-better { padding: 4px 10px; }
+.review-item .why { margin: 6px 0 0; color: var(--muted); font-size: 0.9rem; }
+.tips { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px 4px; }
+.tips h3 { margin: 0 0 4px; font-size: 1rem; }
+.current { border-color: var(--speak); }

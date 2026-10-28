@@ -10,6 +10,9 @@ const STATUS = {
   thinking: "Thinking…",
   speaking: "Speaking…",
 };
+// On the review screen only the player keys do anything.
+const REVIEW_ACTIONS = new Set(["prev_word", "next_word", "speed_up", "speed_down", "play_pause", "replay"]);
+const KEYS_WITH_DEFAULTS = new Set(["Space", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 
 function loadPref(key, fallback) {
   try {
@@ -34,18 +37,22 @@ const state = {
   starting: false,
   recording: false,
   busy: false,
+  reviewing: false,
   transcriptVisible: false,
   hideEnglish: loadPref("hideEnglish", false),
   rate: clampRate(Number(loadPref("rate", 1))),
   voice: loadPref("voice", null),
   voices: [],
   defaultVoice: "premwadee",
-  currentId: null, // Ploy's message loaded in the player
+  currentKey: null, // clip owner loaded in the player
   activeWord: -1,
   scrubbing: false,
 };
-const messages = new Map(); // message id -> message JSON
-const clips = new Map(); // message id -> Map(voice key -> { url, words })
+const messages = new Map(); // message id -> message JSON (current session)
+// Everything playable: Ploy's messages ("m:<id>") and review fixes ("r:<review id>:<index>").
+const owners = new Map(); // key -> { row, texts: { thai, note }, speechPath }
+const clips = new Map(); // owner key -> Map(voice key -> { url, words })
+const pendingClips = new Map(); // `${owner key}|${voice key}` -> in-flight ensureClip promise
 let mediaStream = null;
 let recorder = null;
 let noticeTimer = null;
@@ -54,6 +61,7 @@ const player = new Audio();
 player.preservesPitch = true;
 
 const $ = (id) => document.getElementById(id);
+const messageKey = (id) => `m:${id}`;
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -91,13 +99,22 @@ function errorText(err) {
     case "transcription_failed": return `Speech recognition failed (${err.message}). Check that ffmpeg is installed, then try again.`;
     case "session_not_found": return "This session has ended. Pick a topic to start again.";
     case "message_not_found": return "That reply is no longer in this session.";
+    case "review_not_found": return "That review is no longer available.";
     default: return err.message;
   }
 }
 
 function showScreen(name) {
-  $("screen-topics").hidden = name !== "topics";
-  $("screen-chat").hidden = name !== "chat";
+  for (const screen of ["topics", "chat", "review"]) $(`screen-${screen}`).hidden = name !== screen;
+  state.reviewing = name === "review";
+  // One player, moved to whichever screen needs it.
+  const slot = $(`${name}-player-slot`);
+  if (slot) slot.appendChild($("player"));
+}
+
+function formatDate(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 // --- voices ---
@@ -126,17 +143,22 @@ async function setVoice(voice) {
   state.voice = voice;
   savePref("voice", voice);
   $("voice").value = voice;
-  for (const id of messages.keys()) renderWords(id);
-  if (state.currentId !== null) {
+  for (const key of owners.keys()) renderWords(key);
+  if (state.currentKey !== null) {
     stopPlayback();
-    await openMessage(state.currentId, 0);
+    await openClip(state.currentKey, 0);
   }
 }
 
-// --- clips and the player ---
+// --- clip owners, clips and the player ---
 
-// `key` is the voice the clip was requested with; the picker may have changed while the request was in flight.
-function storeClip(messageId, payload, key = voiceKey()) {
+function registerOwner(key, row, texts, speechPath) {
+  owners.set(key, { row, texts, speechPath });
+  row.dataset.key = key;
+}
+
+// `vkey` is the voice the clip was requested with; the picker may have changed while the request was in flight.
+function storeClip(key, payload, vkey = voiceKey()) {
   if (!payload.audio_b64) return;
   if (payload.fallback_voice && !state.fallbackNoticeShown) {
     state.fallbackNoticeShown = true;
@@ -144,30 +166,30 @@ function storeClip(messageId, payload, key = voiceKey()) {
   }
   const bytes = Uint8Array.from(atob(payload.audio_b64), (c) => c.charCodeAt(0));
   const url = URL.createObjectURL(new Blob([bytes], { type: payload.audio_mime }));
-  if (!clips.has(messageId)) clips.set(messageId, new Map());
-  const byVoice = clips.get(messageId);
-  const old = byVoice.get(key);
+  if (!clips.has(key)) clips.set(key, new Map());
+  const byVoice = clips.get(key);
+  const old = byVoice.get(vkey);
   if (old) URL.revokeObjectURL(old.url);
-  byVoice.set(key, { url, words: payload.words || [] });
+  byVoice.set(vkey, { url, words: payload.words || [] });
 }
 
-function dropClips(messageId) {
-  for (const clip of clips.get(messageId)?.values() ?? []) URL.revokeObjectURL(clip.url);
-  clips.delete(messageId);
+function dropClips(key) {
+  for (const clip of clips.get(key)?.values() ?? []) URL.revokeObjectURL(clip.url);
+  clips.delete(key);
 }
 
-const clipFor = (messageId) => clips.get(messageId)?.get(voiceKey()) ?? null;
-const currentWords = () => clipFor(state.currentId)?.words ?? [];
+const clipFor = (key) => clips.get(key)?.get(voiceKey()) ?? null;
+const currentWords = () => clipFor(state.currentKey)?.words ?? [];
 
 function clearActiveWord() {
   document.querySelectorAll(".word.active").forEach((el) => el.classList.remove("active"));
   state.activeWord = -1;
 }
 
-function loadClip(messageId, { autoplay = true, at = 0 } = {}) {
-  const clip = clipFor(messageId);
+function loadClip(key, { autoplay = true, at = 0 } = {}) {
+  const clip = clipFor(key);
   if (!clip) return false;
-  state.currentId = messageId;
+  state.currentKey = key;
   clearActiveWord();
   if (player.src !== clip.url) player.src = clip.url;
   // Chrome resets playbackRate to defaultPlaybackRate when a new source loads.
@@ -175,46 +197,44 @@ function loadClip(messageId, { autoplay = true, at = 0 } = {}) {
   player.playbackRate = state.rate;
   player.currentTime = at;
   $("player").hidden = false;
-  document.querySelectorAll(".msg.current").forEach((el) => el.classList.remove("current"));
-  document.querySelector(`.msg[data-id="${messageId}"]`)?.classList.add("current");
+  document.querySelectorAll(".current").forEach((el) => el.classList.remove("current"));
+  owners.get(key)?.row.classList.add("current");
   if (autoplay) play();
   refreshPlayer();
   return true;
 }
 
-const pendingClips = new Map(); // `${messageId}|${voice key}` -> in-flight ensureClip promise
-
-function ensureClip(messageId) {
-  if (clipFor(messageId)) return Promise.resolve(true);
+function ensureClip(key) {
+  if (clipFor(key)) return Promise.resolve(true);
   // A second request for the same clip (e.g. R pressed while a voice switch loads) shares the first one,
   // so it doesn't revoke the URL the player is already using.
-  const pendingKey = `${messageId}|${voiceKey()}`;
+  const pendingKey = `${key}|${voiceKey()}`;
   if (!pendingClips.has(pendingKey)) {
-    pendingClips.set(pendingKey, fetchClip(messageId).finally(() => pendingClips.delete(pendingKey)));
+    pendingClips.set(pendingKey, fetchClip(key).finally(() => pendingClips.delete(pendingKey)));
   }
   return pendingClips.get(pendingKey);
 }
 
-async function fetchClip(messageId) {
-  if (state.sessionId === null) return false;
-  const session = state.sessionId;
-  const key = voiceKey();
+async function fetchClip(key) {
+  const owner = owners.get(key);
+  if (!owner) return false;
+  const vkey = voiceKey();
   try {
-    const res = await postJson(`/api/sessions/${session}/messages/${messageId}/speech`, { voice: requestVoice() });
-    if (state.sessionId !== session) return false; // the session ended while this was in flight
-    storeClip(messageId, res, key);
-    renderWords(messageId);
-    return Boolean(clipFor(messageId));
+    const res = await postJson(owner.speechPath, { voice: requestVoice() });
+    if (owners.get(key) !== owner) return false; // the session or review closed while this was in flight
+    storeClip(key, res, vkey);
+    renderWords(key);
+    return Boolean(clipFor(key));
   } catch (err) {
     showNotice(errorText(err), "error");
     return false;
   }
 }
 
-async function openMessage(messageId, at = 0) {
+async function openClip(key, at = 0) {
   if (state.recording) return;
   // Re-check after the fetch: a recording may have started meanwhile, and playing now would leak into the mic.
-  if (await ensureClip(messageId) && !state.recording) loadClip(messageId, { autoplay: true, at });
+  if (await ensureClip(key) && !state.recording) loadClip(key, { autoplay: true, at });
 }
 
 function play() {
@@ -227,25 +247,25 @@ function stopPlayback() {
 }
 
 function togglePlay() {
-  if (state.currentId === null || state.recording) return;
+  if (state.currentKey === null || state.recording) return;
   if (player.paused) play();
   else stopPlayback();
 }
 
-function lastAssistantId() {
+function lastAssistantKey() {
   let last = null;
-  for (const message of messages.values()) if (message.role === "assistant") last = message.id;
+  for (const message of messages.values()) if (message.role === "assistant") last = messageKey(message.id);
   return last;
 }
 
 function replay() {
-  if (state.sessionId === null || state.recording) return;
-  const id = state.currentId ?? lastAssistantId();
-  if (id !== null) openMessage(id, 0);
+  if (state.recording || (state.sessionId === null && !state.reviewing)) return;
+  const key = state.currentKey ?? (state.reviewing ? null : lastAssistantKey());
+  if (key !== null) openClip(key, 0);
 }
 
 function stepWords(dir) {
-  if (state.currentId === null || state.recording) return;
+  if (state.currentKey === null || state.recording) return;
   const words = currentWords();
   if (words.length) {
     player.currentTime = words[stepWord(words, player.currentTime, dir)].t_start;
@@ -257,19 +277,19 @@ function stepWords(dir) {
   refreshPlayer();
 }
 
-async function seekToWord(messageId, word) {
+async function seekToWord(key, word) {
   if (state.recording) return;
   // The line may have been rendered from another voice's clip, so fetch this voice's and match by position.
-  if (!(await ensureClip(messageId)) || state.recording) return;
-  const words = clipFor(messageId).words;
+  if (!(await ensureClip(key)) || state.recording) return;
+  const words = clipFor(key).words;
   const match = words.find((w) => w.part === word.part && w.end > word.start);
   const at = match?.t_start ?? 0;
-  if (messageId === state.currentId) {
+  if (key === state.currentKey) {
     player.currentTime = at;
     if (player.paused) play();
     refreshPlayer();
   } else {
-    loadClip(messageId, { autoplay: true, at });
+    loadClip(key, { autoplay: true, at });
   }
 }
 
@@ -283,13 +303,13 @@ function setRate(rate) {
 }
 
 function highlightWord() {
-  const i = state.currentId === null ? -1 : wordIndexAt(currentWords(), player.currentTime);
+  const i = state.currentKey === null ? -1 : wordIndexAt(currentWords(), player.currentTime);
   if (i === state.activeWord) return;
   clearActiveWord();
   state.activeWord = i;
   if (i >= 0) {
-    document
-      .querySelectorAll(`.msg[data-id="${state.currentId}"] .word[data-word="${i}"]`)
+    owners.get(state.currentKey)?.row
+      .querySelectorAll(`.word[data-word="${i}"]`)
       .forEach((el) => el.classList.add("active"));
   }
 }
@@ -308,17 +328,55 @@ function tick() {
 }
 
 player.addEventListener("play", () => {
-  setStatus("speaking");
+  if (!state.reviewing) setStatus("speaking");
   cancelAnimationFrame(rafId);
   rafId = requestAnimationFrame(tick);
 });
 player.addEventListener("pause", () => {
   cancelAnimationFrame(rafId);
   refreshPlayer();
-  if (!state.recording && !state.busy) setStatus("idle");
+  if (!state.recording && !state.busy && !state.reviewing) setStatus("idle");
 });
 player.addEventListener("loadedmetadata", refreshPlayer);
 player.addEventListener("seeked", refreshPlayer);
+
+/** Rebuild an owner's lines so each spoken word (for the current voice) is a clickable span. */
+function renderWords(key) {
+  const owner = owners.get(key);
+  if (!owner) return;
+  // Fall back to any voice's timings so lines stay clickable after a voice switch; a click fetches the new voice.
+  const byVoice = clips.get(key);
+  const clip = clipFor(key) ?? [...(byVoice?.values() ?? [])].find((c) => c.words.length);
+  const words = clip?.words ?? [];
+  for (const line of owner.row.querySelectorAll("p[data-part]")) {
+    const part = line.dataset.part;
+    const text = owner.texts[part] ?? "";
+    line.replaceChildren(...splitByWords(text, words, part).map((piece) => {
+      if (piece.word === null) return document.createTextNode(piece.text);
+      const span = document.createElement("span");
+      span.className = "word";
+      span.dataset.word = String(piece.word);
+      span.textContent = piece.text;
+      span.addEventListener("click", () => seekToWord(key, words[piece.word]));
+      return span;
+    }));
+  }
+  if (key === state.currentKey) {
+    state.activeWord = -1;
+    highlightWord();
+  }
+}
+
+function resetPlayer() {
+  stopPlayback();
+  for (const key of [...clips.keys()]) dropClips(key);
+  owners.clear();
+  messages.clear();
+  state.currentKey = null;
+  state.activeWord = -1;
+  player.removeAttribute("src");
+  $("player").hidden = true;
+}
 
 // --- transcript ---
 
@@ -353,42 +411,22 @@ function addMessage(message) {
     row.appendChild(peek);
   }
   $("transcript").appendChild(row);
-  renderWords(message.id);
+  if (ploy) {
+    const key = messageKey(message.id);
+    registerOwner(
+      key, row, { thai: message.thai, note: message.english_note },
+      `/api/sessions/${state.sessionId}/messages/${message.id}/speech`,
+    );
+    renderWords(key);
+  }
   row.scrollIntoView({ block: "end" });
-}
-
-/** Rebuild Ploy's lines so each spoken word (for the current voice) is a clickable span. */
-function renderWords(messageId) {
-  const message = messages.get(messageId);
-  const row = document.querySelector(`.msg[data-id="${messageId}"]`);
-  if (!message || !row || message.role !== "assistant") return;
-  // Fall back to any voice's timings so lines stay clickable after a voice switch; a click fetches the new voice.
-  const byVoice = clips.get(messageId);
-  const clip = clipFor(messageId) ?? [...(byVoice?.values() ?? [])].find((c) => c.words.length);
-  const words = clip?.words ?? [];
-  for (const line of row.querySelectorAll("p[data-part]")) {
-    const part = line.dataset.part;
-    const text = part === "note" ? message.english_note : message.thai;
-    line.replaceChildren(...splitByWords(text, words, part).map((piece) => {
-      if (piece.word === null) return document.createTextNode(piece.text);
-      const span = document.createElement("span");
-      span.className = "word";
-      span.dataset.word = String(piece.word);
-      span.textContent = piece.text;
-      span.addEventListener("click", () => seekToWord(messageId, words[piece.word]));
-      return span;
-    }));
-  }
-  if (messageId === state.currentId) {
-    state.activeWord = -1;
-    highlightWord();
-  }
 }
 
 function forgetMessage(messageId) {
   document.querySelector(`.msg[data-id="${messageId}"]`)?.remove();
   messages.delete(messageId);
-  dropClips(messageId);
+  owners.delete(messageKey(messageId));
+  dropClips(messageKey(messageId));
 }
 
 function toggleTranscript() {
@@ -408,6 +446,99 @@ function toggleEnglish() {
   document.querySelectorAll(".msg.peek").forEach((row) => row.classList.remove("peek"));
   document.querySelectorAll(".peek-btn").forEach((btn) => { btn.textContent = "Show English"; });
   applyHideEnglish();
+}
+
+// --- review ---
+
+function showReview(review) {
+  resetPlayer();
+  $("review-title").textContent = `Review · ${review.topic_label} · ${formatDate(review.created_at)}`;
+  const fixes = review.items.filter((item) => !item.ok).length;
+  $("review-summary").textContent = review.items.length
+    ? `${review.items.length - fixes} of ${review.items.length} sentence${review.items.length === 1 ? "" : "s"} sounded natural.`
+    : "No Thai sentences to review.";
+  const list = $("review-items");
+  list.replaceChildren();
+  review.items.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = `review-item ${item.ok ? "ok" : "fix"}`;
+    const said = document.createElement("p");
+    said.className = "said";
+    said.textContent = item.ok ? `✓ ${item.said}` : item.said;
+    row.appendChild(said);
+    if (!item.ok) {
+      const key = `r:${review.id}:${index}`;
+      const line = document.createElement("div");
+      line.className = "better-line";
+      const playBtn = document.createElement("button");
+      playBtn.type = "button";
+      playBtn.className = "play-better";
+      playBtn.textContent = "▶";
+      playBtn.setAttribute("aria-label", "Hear the better version");
+      playBtn.addEventListener("click", (event) => {
+        event.currentTarget.blur();
+        openClip(key, 0);
+      });
+      const better = document.createElement("p");
+      better.className = "thai better";
+      better.dataset.part = "thai";
+      better.textContent = item.better;
+      line.append(playBtn, better);
+      row.appendChild(line);
+      if (item.why) {
+        const why = document.createElement("p");
+        why.className = "why";
+        why.textContent = item.why;
+        row.appendChild(why);
+      }
+      registerOwner(key, row, { thai: item.better }, `/api/reviews/${review.id}/items/${index}/speech`);
+    }
+    list.appendChild(row);
+  });
+  $("review-tips").replaceChildren(...review.tips.map((tip) => {
+    const li = document.createElement("li");
+    li.textContent = tip;
+    return li;
+  }));
+  $("review-tips-block").hidden = review.tips.length === 0;
+  showScreen("review");
+}
+
+function closeReview() {
+  resetPlayer();
+  showScreen("topics");
+  loadReviews().catch(() => {});
+}
+
+async function openReview(reviewId) {
+  try {
+    const review = await api(`/api/reviews/${reviewId}`);
+    // A topic clicked while this loaded owns the screen now; showing the review would orphan that session.
+    if (state.starting || state.sessionId !== null) return;
+    showReview(review);
+  } catch (err) {
+    showNotice(errorText(err), "error");
+  }
+}
+
+async function loadReviews() {
+  const { reviews } = await api("/api/reviews");
+  const list = $("reviews-list");
+  list.replaceChildren();
+  $("reviews-empty").hidden = reviews.length > 0;
+  for (const review of reviews) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const verdict = review.fixes ? `${review.fixes} to improve` : "all natural";
+    btn.textContent = `${formatDate(review.created_at)} · ${review.topic_label} · ${verdict} (${review.total} sentence${review.total === 1 ? "" : "s"})`;
+    btn.addEventListener("click", (event) => {
+      event.currentTarget.blur();
+      openReview(review.id);
+    });
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
 }
 
 // --- topics and memory ---
@@ -463,16 +594,6 @@ function stopMic() {
   mediaStream = null;
 }
 
-function resetPlayer() {
-  stopPlayback();
-  for (const id of [...clips.keys()]) dropClips(id);
-  messages.clear();
-  state.currentId = null;
-  state.activeWord = -1;
-  player.removeAttribute("src");
-  $("player").hidden = true;
-}
-
 async function startSession(topicId) {
   // A double-click must not open two mic streams and two sessions.
   if (state.starting || state.sessionId !== null) return;
@@ -485,20 +606,21 @@ async function startSession(topicId) {
     return;
   }
   await voicesReady;
-  showScreen("chat");
   resetPlayer();
+  showScreen("chat");
   $("transcript").replaceChildren();
   state.busy = true;
   setStatus("thinking");
-  const key = voiceKey();
+  const vkey = voiceKey();
   try {
     const res = await postJson("/api/sessions", { topic: topicId, voice: requestVoice() });
     state.sessionId = res.session_id;
     state.fallbackNoticeShown = false;
-    storeClip(res.message.id, res, key);
+    const key = messageKey(res.message.id);
+    storeClip(key, res, vkey);
     addMessage(res.message);
     state.busy = false;
-    if (!loadClip(res.message.id)) openMessage(res.message.id, 0);
+    if (!loadClip(key)) openClip(key, 0);
   } catch (err) {
     state.busy = false;
     stopMic();
@@ -513,10 +635,13 @@ async function endSession() {
   if (state.sessionId === null || state.busy || state.recording) return;
   stopPlayback();
   state.busy = true;
-  setStatus("thinking", "Saving and updating what I remember…");
+  setStatus("thinking", "Saving, updating what I remember and reviewing your Thai…");
+  let review = null;
   try {
-    const { facts } = await api(`/api/sessions/${state.sessionId}/end`, { method: "POST" });
-    showNotice(`Saved. I now remember ${facts.length} thing${facts.length === 1 ? "" : "s"} about you.`);
+    const result = await api(`/api/sessions/${state.sessionId}/end`, { method: "POST" });
+    review = result.review;
+    const facts = result.facts.length;
+    showNotice(`Saved. I now remember ${facts} thing${facts === 1 ? "" : "s"} about you.`);
   } catch (err) {
     showNotice(errorText(err), "error");
   } finally {
@@ -524,8 +649,10 @@ async function endSession() {
     state.sessionId = null;
     resetPlayer();
     stopMic();
-    showScreen("topics");
+    if (review) showReview(review);
+    else showScreen("topics");
     loadMemory().catch(() => {});
+    loadReviews().catch(() => {});
   }
 }
 
@@ -572,18 +699,19 @@ async function sendRecording(lang, mime, chunks, durationMs) {
   form.append("audio", new Blob(chunks, { type: mime }), `recording${suffixForMime(mime)}`);
   form.append("lang", lang);
   form.append("voice", requestVoice());
-  const key = voiceKey();
+  const vkey = voiceKey();
   setStatus("thinking");
   try {
     const res = await api(`/api/sessions/${state.sessionId}/turns`, { method: "POST", body: form });
     state.busy = false;
     if (res.kind === "reply") {
-      storeClip(res.assistant_message.id, res, key);
+      const key = messageKey(res.assistant_message.id);
+      storeClip(key, res, vkey);
       addMessage(res.user_message);
       addMessage(res.assistant_message);
-      if (!loadClip(res.assistant_message.id)) await openMessage(res.assistant_message.id, 0);
+      if (!loadClip(key)) await openClip(key, 0);
     } else if (res.replay_message_id !== null) {
-      await openMessage(res.replay_message_id, 0);
+      await openClip(messageKey(res.replay_message_id), 0);
     } else {
       setStatus("idle");
     }
@@ -602,10 +730,11 @@ async function undo() {
   state.busy = true;
   try {
     const { removed_ids: removed } = await api(`/api/sessions/${state.sessionId}/undo`, { method: "POST" });
+    const currentRemoved = removed.some((id) => messageKey(id) === state.currentKey);
     removed.forEach(forgetMessage);
-    if (removed.includes(state.currentId)) {
-      state.currentId = null;
-      const last = lastAssistantId();
+    if (currentRemoved) {
+      state.currentKey = null;
+      const last = lastAssistantKey();
       if (last === null || !loadClip(last, { autoplay: false })) $("player").hidden = true;
     }
     showNotice(removed.length ? "Last turn removed. Say it again." : "Nothing to undo.");
@@ -617,22 +746,21 @@ async function undo() {
   }
 }
 
-const KEYS_WITH_DEFAULTS = new Set(["Space", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
-
 function onKey(event) {
   const tag = event.target?.tagName;
   // A focused slider or select owns the arrow keys and Enter; push-to-talk still works.
   if ((tag === "INPUT" || tag === "SELECT") && event.code !== "Space") return;
-  const inSession = state.sessionId !== null;
+  const active = state.sessionId !== null || state.reviewing;
   const modified = event.metaKey || event.ctrlKey || event.altKey;
-  if (inSession && !modified && KEYS_WITH_DEFAULTS.has(event.code)) event.preventDefault();
+  if (active && !modified && KEYS_WITH_DEFAULTS.has(event.code)) event.preventDefault();
   const action = keyAction(
     {
       type: event.type, code: event.code, shiftKey: event.shiftKey, repeat: event.repeat,
       metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey,
     },
-    { recording: state.recording, busy: state.busy, inSession },
+    { recording: state.recording, busy: state.busy, inSession: active },
   );
+  if (state.reviewing && !REVIEW_ACTIONS.has(action)) return;
   switch (action) {
     case "start_th": startRecording("th"); break;
     case "start_en": startRecording("en"); break;
@@ -688,6 +816,7 @@ bindButton("btn-undo", undo);
 bindButton("btn-transcript", toggleTranscript);
 bindButton("btn-english", toggleEnglish);
 bindButton("btn-end", endSession);
+bindButton("btn-review-done", closeReview);
 
 setRate(state.rate);
 applyHideEnglish();
@@ -696,3 +825,4 @@ showScreen("topics");
 const voicesReady = loadVoices().catch(() => { state.voice = null; });
 loadTopics().catch((err) => showNotice(errorText(err), "error"));
 loadMemory().catch(() => {});
+loadReviews().catch(() => {});

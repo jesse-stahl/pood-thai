@@ -178,3 +178,50 @@ def test_voice_catalog_validates_and_passes_voices_through(tmp_path):
         assert r.status_code == 404 and r.json()["error"] == "message_not_found"
         r = client.post(f"/api/sessions/{sid}/messages/1/speech", json={"voice": "ava-multi"})
         assert r.status_code == 200 and speaker.calls[-1][1] == "ava-multi"
+
+
+def test_end_returns_a_review_and_the_review_endpoints_serve_it(tmp_path):
+    from pood_thai.prompts import REVIEW_SYSTEM_PROMPT
+
+    review_json = (
+        '{"items": [{"n": 1, "ok": false, "better": "สบายดีครับ", "why": "Add ครับ to sound polite."}],'
+        ' "tips": ["Use polite particles."]}'
+    )
+
+    def complete(system_prompt, message):
+        return review_json if system_prompt == REVIEW_SYSTEM_PROMPT else '{"facts": []}'
+
+    db = Database(tmp_path / "r.sqlite3")
+    speaker = FakeSpeaker()
+    manager = ConversationManager(
+        db, FakeBrain([[OPENING, reply_json(thai="ดีค่ะ")]], completion=complete), FakeTranscriber(["สบายดี"]),
+        speaker, today=lambda: "2026-10-28",
+    )
+    client = TestClient(create_app(manager, db), base_url="http://127.0.0.1:8765")
+    with client:
+        sid = _start(client, topic="food")["session_id"]
+        client.post(f"/api/sessions/{sid}/turns", files={"audio": ("r.webm", b"x", "audio/webm")}, data={"lang": "th"})
+        review = client.post(f"/api/sessions/{sid}/end").json()["review"]
+        assert review["topic"] == "food" and review["topic_label"] == "Food" and review["session_id"] == sid
+        assert review["items"] == [{"said": "สบายดี", "ok": False, "better": "สบายดีครับ", "why": "Add ครับ to sound polite."}]
+        assert review["tips"] == ["Use polite particles."]
+        listed = client.get("/api/reviews").json()["reviews"]
+        assert listed == [{
+            "id": review["id"], "topic": "food", "topic_label": "Food",
+            "created_at": review["created_at"], "total": 1, "fixes": 1,
+        }]
+        assert client.get(f"/api/reviews/{review['id']}").json() == review
+        audio = client.post(f"/api/reviews/{review['id']}/items/0/speech", json={"voice": "achara"}).json()
+        assert audio["audio_b64"] and audio["words"][0]["part"] == "thai"
+        assert speaker.calls[-1][1] == "achara"
+        r = client.post(f"/api/reviews/{review['id']}/items/3/speech", json={"voice": "achara"})
+        assert r.status_code == 404 and r.json()["error"] == "review_not_found"
+        r = client.get("/api/reviews/999")
+        assert r.status_code == 404 and r.json()["error"] == "review_not_found"
+
+
+def test_end_without_a_review_returns_null(make_client):
+    client, _ = make_client([OPENING])
+    with client:
+        sid = _start(client)["session_id"]
+        assert client.post(f"/api/sessions/{sid}/end").json() == {"facts": [], "review": None}

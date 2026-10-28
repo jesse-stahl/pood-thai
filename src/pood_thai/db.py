@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pood_thai.models import Fact, Lang, Message, Role
+from pood_thai.models import Fact, Lang, Message, Review, ReviewItem, Role
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -24,6 +25,14 @@ CREATE TABLE IF NOT EXISTS messages (
     english TEXT NOT NULL DEFAULT '',
     english_note TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    topic TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    items TEXT NOT NULL,
+    tips TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS memory_facts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +71,17 @@ def _fact(row: sqlite3.Row) -> Fact:
     )
 
 
+def _review(row: sqlite3.Row) -> Review:
+    return Review(
+        id=row["id"],
+        session_id=row["session_id"],
+        topic=row["topic"],
+        created_at=row["created_at"],
+        items=tuple(ReviewItem(**item) for item in json.loads(row["items"])),
+        tips=tuple(json.loads(row["tips"])),
+    )
+
+
 class Database:
     def __init__(self, path: Path | str):
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -85,6 +105,33 @@ class Database:
     def session_ended_at(self, session_id: int) -> str | None:
         row = self._conn.execute("SELECT ended_at FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return None if row is None else row["ended_at"]
+
+    def session_topic(self, session_id: int) -> str | None:
+        row = self._conn.execute("SELECT topic FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return None if row is None else row["topic"]
+
+    def add_review(
+        self, session_id: int, topic: str, items: tuple[ReviewItem, ...], tips: tuple[str, ...]
+    ) -> Review:
+        items_json = json.dumps(
+            [{"said": i.said, "ok": i.ok, "better": i.better, "why": i.why} for i in items], ensure_ascii=False
+        )
+        with self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO reviews (session_id, topic, created_at, items, tips) VALUES (?, ?, ?, ?, ?)",
+                (session_id, topic, _now(), items_json, json.dumps(list(tips), ensure_ascii=False)),
+            )
+        review = self.get_review(int(cur.lastrowid))
+        assert review is not None
+        return review
+
+    def get_review(self, review_id: int) -> Review | None:
+        row = self._conn.execute("SELECT * FROM reviews WHERE id = ?", (review_id,)).fetchone()
+        return None if row is None else _review(row)
+
+    def list_reviews(self) -> list[Review]:
+        rows = self._conn.execute("SELECT * FROM reviews ORDER BY id DESC").fetchall()
+        return [_review(r) for r in rows]
 
     def add_message(
         self,
