@@ -28,7 +28,8 @@ test("wordIndexAt finds the word being heard", () => {
 test("stepWord moves forward and back like a music player", () => {
   assert.equal(stepWord(W, 0, 1), 0);
   assert.equal(stepWord(W, 0.3, 1), 2);
-  assert.equal(stepWord(W, 0.5, 1), 2);
+  assert.equal(stepWord(W, 0.5, 1), -1); // already on the last word: nothing to jump to
+  assert.equal(stepWord(W, 1.8, 1), -1); // trailing silence after the last word
   assert.equal(stepWord(W, 0.3, -1), 0); // just started word 1 -> previous word
   assert.equal(stepWord(W, 0.75, -1), 2); // well into word 2 -> restart it
   assert.equal(stepWord(W, 0, -1), 0);
@@ -52,4 +53,13 @@ test("formatTime shows tenths under a minute", () => {
   assert.equal(formatTime(1.234), "1.2s");
   assert.equal(formatTime(75), "1:15");
   assert.equal(formatTime(Number.NaN), "0.0s");
+});
+
+test("splitByWords counts code points like the server, so emoji don't shift words", () => {
+  const word = { part: "thai", start: 2, end: 4, t_start: 0, t_end: 0.3 };
+  assert.deepEqual(splitByWords("😊 ดีค่ะ", [word], "thai"), [
+    { text: "😊 ", word: null },
+    { text: "ดี", word: 0 },
+    { text: "ค่ะ", word: null },
+  ]);
 });

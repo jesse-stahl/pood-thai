@@ -203,3 +203,31 @@ async def test_fallback_speaker_uses_fallback_with_the_same_voice_and_flags_it()
 async def test_fallback_speaker_prefers_primary():
     audio = await FallbackSpeaker(_Working(), _Failing()).synthesize([Segment("ค่ะ", "th")], "premwadee")
     assert audio.fallback_used is False
+
+
+async def test_azure_speaker_times_out_with_a_speech_error(monkeypatch):
+    import time
+
+    import pood_thai.tts as tts
+
+    monkeypatch.setattr(tts, "AZURE_TIMEOUT_S", 0.05)
+
+    def slow(ssml):
+        time.sleep(0.3)
+        return b"", []
+
+    with pytest.raises(SpeechError, match="timed out"):
+        await AzureSpeaker("k", "r", synth_fn=slow).synthesize([Segment("ค่ะ", "th")], "premwadee")
+
+
+async def test_azure_runs_on_its_own_threads_so_a_hung_call_cannot_starve_the_fallback():
+    import threading
+
+    names = []
+
+    def record(ssml):
+        names.append(threading.current_thread().name)
+        return b"RIFF", []
+
+    await AzureSpeaker("k", "r", synth_fn=record).synthesize([Segment("ค่ะ", "th")], "premwadee")
+    assert names[0].startswith("azure-tts")

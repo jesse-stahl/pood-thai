@@ -359,6 +359,7 @@ async def test_end_without_thai_turns_makes_no_review(db):
     result = await manager.end(sid)
     assert result.review is None
     assert all(c[0] != REVIEW_SYSTEM_PROMPT for c in brain.complete_calls)
+    assert result.review_failed is False
 
 
 async def test_a_failed_review_still_saves_memory(db):
@@ -372,6 +373,7 @@ async def test_a_failed_review_still_saves_memory(db):
     assert result.review is None
     assert [f.fact for f in result.facts] == ["Has a cat."]
     assert db.list_reviews() == []
+    assert result.review_failed is True
 
 
 async def test_speak_review_speaks_the_better_version_only(db):
@@ -388,3 +390,43 @@ async def test_speak_review_speaks_the_better_version_only(db):
     for review_id, index in ((review.id, 5), (999, 0), (ok_review.id, 0)):
         with pytest.raises(ReviewNotFound):
             await manager.speak_review(review_id, index, "achara")
+
+
+async def test_an_unexpected_review_error_still_returns_the_saved_facts(db, monkeypatch):
+    import sqlite3
+
+    manager, _, _, _ = make(
+        db, [OPENING, reply_json()], texts=["ฉันมีแมว"], completion=memory_and_review('{"facts": ["Has a cat."]}'),
+    )
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "add_review", locked)
+    result = await manager.end(sid)
+    assert [f.fact for f in result.facts] == ["Has a cat."]
+    assert result.review is None and result.review_failed is True
+
+
+async def test_memory_and_review_run_at_the_same_time(db):
+    import asyncio
+
+    started = {"memory": asyncio.Event(), "review": asyncio.Event()}
+
+    class WaitingBrain(FakeBrain):
+        async def complete(self, system_prompt, message):
+            mine, other = ("review", "memory") if system_prompt == REVIEW_SYSTEM_PROMPT else ("memory", "review")
+            started[mine].set()
+            # Run one after the other and this times out: each call waits until the other has started.
+            await asyncio.wait_for(started[other].wait(), 1)
+            return await super().complete(system_prompt, message)
+
+    brain = WaitingBrain([[OPENING, reply_json()]], completion=memory_and_review('{"facts": ["Has a cat."]}'))
+    manager = ConversationManager(db, brain, FakeTranscriber(["ฉันมีแมว"]), FakeSpeaker(), today=lambda: "2026-10-28")
+    sid = (await manager.start("day")).session_id
+    await manager.handle_audio(sid, b"rec", ".webm", "th")
+    result = await manager.end(sid)
+    assert [f.fact for f in result.facts] == ["Has a cat."]
+    assert result.review is not None and result.review_failed is False

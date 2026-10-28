@@ -201,7 +201,9 @@ def test_end_returns_a_review_and_the_review_endpoints_serve_it(tmp_path):
     with client:
         sid = _start(client, topic="food")["session_id"]
         client.post(f"/api/sessions/{sid}/turns", files={"audio": ("r.webm", b"x", "audio/webm")}, data={"lang": "th"})
-        review = client.post(f"/api/sessions/{sid}/end").json()["review"]
+        ended = client.post(f"/api/sessions/{sid}/end").json()
+        assert ended["review_failed"] is False
+        review = ended["review"]
         assert review["topic"] == "food" and review["topic_label"] == "Food" and review["session_id"] == sid
         assert review["items"] == [{"said": "สบายดี", "ok": False, "better": "สบายดีครับ", "why": "Add ครับ to sound polite."}]
         assert review["tips"] == ["Use polite particles."]
@@ -224,4 +226,4 @@ def test_end_without_a_review_returns_null(make_client):
     client, _ = make_client([OPENING])
     with client:
         sid = _start(client)["session_id"]
-        assert client.post(f"/api/sessions/{sid}/end").json() == {"facts": [], "review": None}
+        assert client.post(f"/api/sessions/{sid}/end").json() == {"facts": [], "review": None, "review_failed": False}

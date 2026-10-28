@@ -241,6 +241,7 @@ def create_app(
         return {
             "facts": [fact_json(f) for f in result.facts],
             "review": review_json(result.review) if result.review else None,
+            "review_failed": result.review_failed,
         }
 
     @app.get("/api/reviews")

@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import wave
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,9 @@ VOICES: dict[str, Voice] = {
 ENGLISH_VOICE = "en-US-AvaNeural"  # reads English help notes next to the Thai-only voices
 SAY_VOICES = {"th": "Kanya", "en": "Samantha"}
 AZURE_TIMEOUT_S = 15  # a hung request falls back to the Mac voice instead of blocking the turn
+# A timed-out Azure call keeps its thread until the SDK gives up, so Azure gets its own small pool and
+# can never starve the default pool the Mac fallback (asyncio.to_thread) runs on.
+_AZURE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="azure-tts")
 _SPEAK_OPEN = '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="th-TH">'
 
 
@@ -209,7 +213,10 @@ class AzureSpeaker:
         if not spans:
             raise SpeechError("Nothing to speak")
         try:
-            data, boundaries = await asyncio.wait_for(asyncio.to_thread(self._synth_fn, ssml), AZURE_TIMEOUT_S)
+            loop = asyncio.get_running_loop()
+            data, boundaries = await asyncio.wait_for(
+                loop.run_in_executor(_AZURE_POOL, self._synth_fn, ssml), AZURE_TIMEOUT_S
+            )
         except SpeechError:
             raise
         except TimeoutError as exc:

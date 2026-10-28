@@ -77,7 +77,8 @@ class StartResult:
 @dataclass(frozen=True)
 class EndResult:
     facts: list[Fact]
-    review: Review | None  # None when there were no Thai turns or the review call failed
+    review: Review | None  # None when there were no Thai turns or the review failed
+    review_failed: bool = False  # the learner spoke Thai but no review could be made
 
 
 @dataclass(frozen=True)
@@ -230,12 +231,21 @@ class ConversationManager:
         current = self._db.list_facts()
         if not any(m.role == "user" for m in messages):
             return EndResult(current, None)
-        # Independent calls, so run them together; each handles its own failure.
-        facts, review = await asyncio.gather(
+        # Independent calls, so run them together. The session is already gone, so one branch failing in an
+        # unexpected way (e.g. a locked database) must not throw away the other's result.
+        facts, outcome = await asyncio.gather(
             self._update_memory(session_id, messages, current),
             self._make_review(session_id, messages),
+            return_exceptions=True,
         )
-        return EndResult(facts, review)
+        if isinstance(facts, BaseException):
+            logger.error("Memory update failed unexpectedly; keeping existing facts", exc_info=facts)
+            facts = current
+        if isinstance(outcome, BaseException):
+            logger.error("Review failed unexpectedly", exc_info=outcome)
+            outcome = (None, True)
+        review, review_failed = outcome
+        return EndResult(facts, review, review_failed)
 
     async def _update_memory(self, session_id: int, messages: list[Message], current: list[Fact]) -> list[Fact]:
         try:
@@ -252,17 +262,18 @@ class ConversationManager:
             return current
         return self._db.replace_facts(facts, source_session_id=session_id)
 
-    async def _make_review(self, session_id: int, messages: list[Message]) -> Review | None:
+    async def _make_review(self, session_id: int, messages: list[Message]) -> tuple[Review | None, bool]:
+        """The saved review (or None) and whether it failed; no Thai turns is not a failure."""
         sentences = review_sentences(messages)
         if not sentences:
-            return None
+            return None, False
         try:
             raw = await self._brain.complete(REVIEW_SYSTEM_PROMPT, build_review_request(messages))
             items, tips = parse_review(raw, sentences)
         except BrainError:
             logger.warning("Review failed; ending without one", exc_info=True)
-            return None
-        return self._db.add_review(session_id, self._db.session_topic(session_id) or "", items, tips)
+            return None, True
+        return self._db.add_review(session_id, self._db.session_topic(session_id) or "", items, tips), False
 
     async def speak_review(self, review_id: int, index: int, voice: str) -> Audio:
         """Speak a saved review item's better version (only items that have one)."""

@@ -45,6 +45,7 @@ const state = {
   voices: [],
   defaultVoice: "premwadee",
   currentKey: null, // clip owner loaded in the player
+  currentVoiceKey: null, // voice of the clip actually loaded (the picker may have moved on)
   activeWord: -1,
   scrubbing: false,
 };
@@ -57,6 +58,10 @@ let mediaStream = null;
 let recorder = null;
 let noticeTimer = null;
 let rafId = 0;
+// Bumped whenever the player is pointed at something; a clip request that resolves late compares against it.
+let selection = 0;
+// Bumped on every review navigation; a past review that loads late compares against it.
+let reviewNav = 0;
 const player = new Audio();
 player.preservesPitch = true;
 
@@ -170,7 +175,8 @@ function storeClip(key, payload, vkey = voiceKey()) {
   const byVoice = clips.get(key);
   const old = byVoice.get(vkey);
   if (old) URL.revokeObjectURL(old.url);
-  byVoice.set(vkey, { url, words: payload.words || [] });
+  // Mac-fallback clips are kept so they can play now, but marked so the next open retries the real voice.
+  byVoice.set(vkey, { url, words: payload.words || [], fallback: Boolean(payload.fallback_voice) });
 }
 
 function dropClips(key) {
@@ -179,7 +185,7 @@ function dropClips(key) {
 }
 
 const clipFor = (key) => clips.get(key)?.get(voiceKey()) ?? null;
-const currentWords = () => clipFor(state.currentKey)?.words ?? [];
+const currentWords = () => clips.get(state.currentKey)?.get(state.currentVoiceKey)?.words ?? [];
 
 function clearActiveWord() {
   document.querySelectorAll(".word.active").forEach((el) => el.classList.remove("active"));
@@ -190,6 +196,8 @@ function loadClip(key, { autoplay = true, at = 0 } = {}) {
   const clip = clipFor(key);
   if (!clip) return false;
   state.currentKey = key;
+  state.currentVoiceKey = voiceKey();
+  selection += 1;
   clearActiveWord();
   if (player.src !== clip.url) player.src = clip.url;
   // Chrome resets playbackRate to defaultPlaybackRate when a new source loads.
@@ -205,7 +213,8 @@ function loadClip(key, { autoplay = true, at = 0 } = {}) {
 }
 
 function ensureClip(key) {
-  if (clipFor(key)) return Promise.resolve(true);
+  const cached = clipFor(key);
+  if (cached && !cached.fallback) return Promise.resolve(true);
   // A second request for the same clip (e.g. R pressed while a voice switch loads) shares the first one,
   // so it doesn't revoke the URL the player is already using.
   const pendingKey = `${key}|${voiceKey()}`;
@@ -231,14 +240,17 @@ async function fetchClip(key) {
     return Boolean(clipFor(key));
   } catch (err) {
     showNotice(errorText(err), "error");
-    return false;
+    return Boolean(clipFor(key)); // a fallback clip can still play
   }
 }
 
 async function openClip(key, at = 0) {
   if (state.recording) return;
-  // Re-check after the fetch: a recording may have started meanwhile, and playing now would leak into the mic.
-  if (await ensureClip(key) && !state.recording) loadClip(key, { autoplay: true, at });
+  const mine = ++selection;
+  const ready = await ensureClip(key);
+  // Re-check after the fetch: a recording may have started (playing would leak into the mic), the owner may be gone
+  // (undo, End, Done), or the user may have picked something else meanwhile.
+  if (ready && !state.recording && mine === selection && owners.has(key)) loadClip(key, { autoplay: true, at });
 }
 
 function play() {
@@ -272,7 +284,9 @@ function stepWords(dir) {
   if (state.currentKey === null || state.recording) return;
   const words = currentWords();
   if (words.length) {
-    player.currentTime = words[stepWord(words, player.currentTime, dir)].t_start;
+    const i = stepWord(words, player.currentTime, dir);
+    if (i < 0) return;
+    player.currentTime = words[i].t_start;
   } else {
     const duration = Number.isFinite(player.duration) ? player.duration : 0;
     player.currentTime = Math.max(0, Math.min(duration, player.currentTime + dir * NO_TIMING_SEEK_S));
@@ -284,11 +298,12 @@ function stepWords(dir) {
 async function seekToWord(key, word) {
   if (state.recording) return;
   // The line may have been rendered from another voice's clip, so fetch this voice's and match by position.
-  if (!(await ensureClip(key)) || state.recording) return;
+  const mine = ++selection;
+  if (!(await ensureClip(key)) || state.recording || mine !== selection || !owners.has(key)) return;
   const words = clipFor(key).words;
   const match = words.find((w) => w.part === word.part && w.end > word.start);
   const at = match?.t_start ?? 0;
-  if (key === state.currentKey) {
+  if (key === state.currentKey && state.currentVoiceKey === voiceKey()) {
     player.currentTime = at;
     if (player.paused) play();
     refreshPlayer();
@@ -332,7 +347,7 @@ function tick() {
 }
 
 player.addEventListener("play", () => {
-  if (!state.reviewing) setStatus("speaking");
+  if (!state.reviewing && !state.busy && !state.recording) setStatus("speaking");
   cancelAnimationFrame(rafId);
   rafId = requestAnimationFrame(tick);
 });
@@ -350,7 +365,7 @@ function renderWords(key) {
   if (!owner) return;
   // Fall back to any voice's timings so lines stay clickable after a voice switch; a click fetches the new voice.
   const byVoice = clips.get(key);
-  const clip = clipFor(key) ?? [...(byVoice?.values() ?? [])].find((c) => c.words.length);
+  const clip = [clipFor(key), ...(byVoice?.values() ?? [])].find((c) => c?.words.length);
   const words = clip?.words ?? [];
   for (const line of owner.row.querySelectorAll("p[data-part]")) {
     const part = line.dataset.part;
@@ -510,15 +525,17 @@ function showReview(review) {
 }
 
 function closeReview() {
+  reviewNav += 1;
   resetPlayer();
   showScreen("topics"); // the list was refreshed when the session ended
 }
 
 async function openReview(reviewId) {
   try {
+    const mine = ++reviewNav;
     const review = await api(`/api/reviews/${reviewId}`);
-    // A topic clicked while this loaded owns the screen now; showing the review would orphan that session.
-    if (state.starting || state.sessionId !== null) return;
+    // A newer review click, Done, or a topic started meanwhile owns the screen now.
+    if (mine !== reviewNav || state.starting || state.sessionId !== null) return;
     showReview(review);
   } catch (err) {
     showNotice(errorText(err), "error");
@@ -602,6 +619,7 @@ async function startSession(topicId) {
   // A double-click must not open two mic streams and two sessions.
   if (state.starting || state.sessionId !== null) return;
   state.starting = true;
+  reviewNav += 1;
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
@@ -645,7 +663,8 @@ async function endSession() {
     const result = await api(`/api/sessions/${state.sessionId}/end`, { method: "POST" });
     review = result.review;
     const facts = result.facts.length;
-    showNotice(`Saved. I now remember ${facts} thing${facts === 1 ? "" : "s"} about you.`);
+    const reviewNote = result.review_failed ? " The review couldn't be made this time." : "";
+    showNotice(`Saved. I now remember ${facts} thing${facts === 1 ? "" : "s"} about you.${reviewNote}`, result.review_failed ? "error" : "info");
   } catch (err) {
     showNotice(errorText(err), "error");
   } finally {
@@ -756,7 +775,6 @@ function onKey(event) {
   if ((tag === "INPUT" || tag === "SELECT") && event.code !== "Space") return;
   const active = state.sessionId !== null || state.reviewing;
   const modified = event.metaKey || event.ctrlKey || event.altKey;
-  if (active && !modified && KEYS_WITH_DEFAULTS.has(event.code)) event.preventDefault();
   const action = keyAction(
     {
       type: event.type, code: event.code, shiftKey: event.shiftKey, repeat: event.repeat,
@@ -764,6 +782,9 @@ function onKey(event) {
     },
     { recording: state.recording, busy: state.busy, inSession: active },
   );
+  // In a session every push-to-talk key is ours; on the review screen only the player keys are, so the rest still scroll.
+  const handled = state.reviewing ? REVIEW_ACTIONS.has(action) : state.sessionId !== null;
+  if (handled && !modified && KEYS_WITH_DEFAULTS.has(event.code)) event.preventDefault();
   if (state.reviewing && !REVIEW_ACTIONS.has(action)) return;
   switch (action) {
     case "start_th": startRecording("th"); break;
