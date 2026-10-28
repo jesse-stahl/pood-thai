@@ -43,6 +43,7 @@ SAY_VOICES = {"th": "Kanya", "en": "Samantha"}
 AZURE_TIMEOUT_S = 15  # a hung request falls back to the Mac voice instead of blocking the turn
 # A timed-out Azure call keeps its thread until the SDK gives up, so Azure gets its own small pool and
 # can never starve the default pool the Mac fallback (asyncio.to_thread) runs on.
+SDK_FRAME_TIMEOUT_MS = 10_000  # max gap between audio frames before the SDK cancels on its own
 _AZURE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="azure-tts")
 _SPEAK_OPEN = '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="th-TH">'
 
@@ -172,6 +173,9 @@ def _azure_synthesize(key: str, region: str, ssml: str) -> tuple[bytes, list[Bou
 
     config = speechsdk.SpeechConfig(subscription=key, region=region)
     config.set_speech_synthesis_output_format(speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm)
+    # Make the SDK itself give up on a stalled stream, so a timed-out call's thread comes back (and Ctrl+C
+    # isn't held up waiting for it) instead of lingering after AZURE_TIMEOUT_S.
+    config.set_property(speechsdk.PropertyId.SpeechSynthesis_FrameTimeoutInterval, str(SDK_FRAME_TIMEOUT_MS))
     # audio_config=None keeps the audio in memory instead of playing it on this machine.
     synthesizer = speechsdk.SpeechSynthesizer(speech_config=config, audio_config=None)
     boundaries: list[Boundary] = []

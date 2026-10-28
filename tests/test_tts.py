@@ -231,3 +231,40 @@ async def test_azure_runs_on_its_own_threads_so_a_hung_call_cannot_starve_the_fa
 
     await AzureSpeaker("k", "r", synth_fn=record).synthesize([Segment("ค่ะ", "th")], "premwadee")
     assert names[0].startswith("azure-tts")
+
+
+def test_azure_sdk_is_told_to_give_up_on_stalled_audio(monkeypatch):
+    import sys
+    import types
+
+    from pood_thai.tts import _azure_synthesize
+
+    calls = []
+
+    class Stop(Exception):
+        pass
+
+    class FakeConfig:
+        def __init__(self, subscription, region):
+            pass
+
+        def set_speech_synthesis_output_format(self, fmt):
+            pass
+
+        def set_property(self, prop, value):
+            calls.append((prop, value))
+
+    class FakeSynthesizer:
+        def __init__(self, speech_config, audio_config):
+            raise Stop()  # enough: the config was built before this point
+
+    fake_sdk = types.SimpleNamespace(
+        SpeechConfig=FakeConfig,
+        SpeechSynthesizer=FakeSynthesizer,
+        SpeechSynthesisOutputFormat=types.SimpleNamespace(Riff24Khz16BitMonoPcm="wav"),
+        PropertyId=types.SimpleNamespace(SpeechSynthesis_FrameTimeoutInterval="frame-timeout"),
+    )
+    monkeypatch.setitem(sys.modules, "azure.cognitiveservices.speech", fake_sdk)
+    with pytest.raises(Stop):
+        _azure_synthesize("k", "r", "<speak/>")
+    assert ("frame-timeout", "10000") in calls
