@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>พูดไทย · pood-thai</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <section id="screen-topics" class="screen">
+      <header>
+        <h1>พูดไทย</h1>
+        <p class="sub">Pick a topic and start talking.</p>
+      </header>
+      <div id="topics" class="topics"></div>
+      <details id="memory-panel" class="memory">
+        <summary>What I remember about you</summary>
+        <ul id="memory-list"></ul>
+        <p id="memory-empty" class="muted">Nothing yet. Have a chat first.</p>
+      </details>
+    </section>
+
+    <section id="screen-chat" class="screen" hidden>
+      <div class="stage">
+        <div id="orb" class="orb" data-mode="idle"><span></span><span></span><span></span></div>
+        <p id="status" class="status"></p>
+        <p class="keys"><kbd>Space</kbd> Thai · <kbd>Shift</kbd>+<kbd>Space</kbd> English · <kbd>R</kbd> replay · <kbd>⌫</kbd> undo · <kbd>T</kbd> transcript</p>
+      </div>
+      <div class="controls">
+        <button id="btn-replay" type="button">Replay</button>
+        <button id="btn-slower" type="button">Slower</button>
+        <button id="btn-undo" type="button">Undo</button>
+        <button id="btn-transcript" type="button">Show transcript</button>
+        <button id="btn-end" type="button" class="end">End</button>
+      </div>
+      <div id="transcript" class="transcript" hidden></div>
+    </section>
+
+    <div id="notice" class="notice" hidden></div>
+  </main>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

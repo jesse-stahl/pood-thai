@@ -1,0 +1,71 @@
+:root {
+  --bg: #f7f4ef;
+  --fg: #1f2328;
+  --muted: #6b6f76;
+  --card: #ffffff;
+  --line: #e4ded4;
+  --accent: #c2410c;
+  --listen: #dc2626;
+  --think: #7c3aed;
+  --speak: #0f766e;
+  --font: -apple-system, BlinkMacSystemFont, "Thonburi", "Sukhumvit Set", "Helvetica Neue", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #16181c; --fg: #e8e6e3; --muted: #9a9ea6; --card: #20232a; --line: #30343c; }
+}
+* { box-sizing: border-box; }
+/* Classes like .transcript set display, which would otherwise override the hidden attribute. */
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font); }
+main { max-width: 760px; margin: 0 auto; padding: 48px 16px; }
+h1 { font-size: 3rem; margin: 0; }
+.sub, .muted { color: var(--muted); }
+.topics { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin: 32px 0; }
+.topics button { text-align: left; padding: 16px; }
+.topics .th { display: block; font-size: 1.15rem; margin-bottom: 4px; }
+.topics .en { color: var(--muted); font-size: 0.9rem; }
+button {
+  font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; padding: 10px 16px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.end { color: var(--accent); }
+.memory { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+.memory summary { cursor: pointer; font-weight: 600; }
+.memory ul { list-style: none; padding: 0; margin: 12px 0 0; }
+.memory li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.memory li button { padding: 4px 10px; font-size: 0.85rem; }
+.stage { display: flex; flex-direction: column; align-items: center; padding: 48px 0 24px; }
+.orb {
+  width: 180px; height: 180px; border-radius: 50%; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--card); border: 2px solid var(--line); transition: border-color .2s, box-shadow .2s;
+}
+.orb span { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); opacity: .35; }
+.orb[data-mode="recording"] { border-color: var(--listen); box-shadow: 0 0 0 12px color-mix(in srgb, var(--listen) 15%, transparent); animation: pulse 1.2s ease-in-out infinite; }
+.orb[data-mode="recording"] span { background: var(--listen); opacity: 1; }
+.orb[data-mode="thinking"] { border-color: var(--think); }
+.orb[data-mode="thinking"] span { background: var(--think); opacity: 1; animation: bounce 1s ease-in-out infinite; }
+.orb[data-mode="thinking"] span:nth-child(2) { animation-delay: .15s; }
+.orb[data-mode="thinking"] span:nth-child(3) { animation-delay: .3s; }
+.orb[data-mode="speaking"] { border-color: var(--speak); }
+.orb[data-mode="speaking"] span { background: var(--speak); opacity: 1; animation: wave .8s ease-in-out infinite alternate; }
+.orb[data-mode="speaking"] span:nth-child(2) { animation-delay: .2s; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 22px color-mix(in srgb, var(--listen) 8%, transparent); } }
+@keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
+@keyframes wave { from { transform: scaleY(1); } to { transform: scaleY(2.6); } }
+.status { font-size: 1.1rem; margin: 24px 0 8px; min-height: 1.5em; }
+.keys { color: var(--muted); font-size: 0.85rem; }
+kbd { font: inherit; font-size: 0.8rem; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; background: var(--card); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.transcript { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; max-height: 45vh; overflow-y: auto; }
+.msg { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; max-width: 85%; }
+.msg.user { align-self: flex-end; }
+.msg p { margin: 2px 0; }
+.msg .thai { font-size: 1.15rem; }
+.msg .english { color: var(--muted); font-size: 0.9rem; }
+.msg .note { font-style: italic; }
+.notice {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(640px, calc(100% - 32px));
+  background: var(--fg); color: var(--bg); padding: 12px 18px; border-radius: 12px; font-size: 0.95rem;
+}
+.notice.error { background: var(--listen); color: #fff; }
