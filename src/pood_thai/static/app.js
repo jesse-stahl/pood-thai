@@ -354,7 +354,9 @@ function addMessage(message) {
   row.dataset.id = String(message.id);
   if (message.english_note) addLine(row, "note", message.english_note, ploy ? "note" : null);
   if (message.thai) addLine(row, "thai", message.thai, ploy ? "thai" : null);
-  if (message.english) {
+  if (message.english && !message.thai) {
+    addLine(row, "english-only", message.english); // an English question, not a translation: never hidden
+  } else if (message.english) {
     addLine(row, "english", message.english);
     const peek = document.createElement("button");
     peek.type = "button";
@@ -599,9 +601,9 @@ async function sendRecording(lang, mime, chunks, durationMs) {
       if (!loadClip(res.assistant_message.id)) await openMessage(res.assistant_message.id, 0);
     } else if (res.replay_message_id !== null) {
       await openMessage(res.replay_message_id, 0);
-    } else {
-      setStatus("idle");
     }
+    // Nothing ended up playing (e.g. the clip fetch failed), so don't leave the orb on "Thinking…".
+    if (player.paused && !state.recording) setStatus("idle");
   } catch (err) {
     state.busy = false;
     setStatus("idle");
