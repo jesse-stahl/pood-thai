@@ -161,11 +161,7 @@ def create_app(
 
     @app.get("/api/voices")
     async def list_voices():
-        return {
-            "voices": [{"id": v.id, "label": v.label} for v in voices],
-            "default": DEFAULT_VOICE,
-            "word_timing": bool(voices),
-        }
+        return {"voices": [{"id": v.id, "label": v.label} for v in voices], "default": DEFAULT_VOICE}
 
     @app.post("/api/sessions")
     async def start_session(body: StartRequest):

@@ -39,6 +39,7 @@ VOICES: dict[str, Voice] = {
 }
 ENGLISH_VOICE = "en-US-AvaNeural"  # reads English help notes next to the Thai-only voices
 SAY_VOICES = {"th": "Kanya", "en": "Samantha"}
+AZURE_TIMEOUT_S = 15  # a hung request falls back to the Mac voice instead of blocking the turn
 _SPEAK_OPEN = '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="th-TH">'
 
 
@@ -208,9 +209,11 @@ class AzureSpeaker:
         if not spans:
             raise SpeechError("Nothing to speak")
         try:
-            data, boundaries = await asyncio.to_thread(self._synth_fn, ssml)
+            data, boundaries = await asyncio.wait_for(asyncio.to_thread(self._synth_fn, ssml), AZURE_TIMEOUT_S)
         except SpeechError:
             raise
+        except TimeoutError as exc:
+            raise SpeechError(f"Azure TTS timed out after {AZURE_TIMEOUT_S}s") from exc
         except Exception as exc:
             raise SpeechError(f"Azure TTS request failed: {exc}") from exc
         return Audio(data, "audio/wav", words=map_words(spans, boundaries))

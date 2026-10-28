@@ -76,7 +76,7 @@ class TurnResult:
 
 
 # Thai words (and the spaces between them) inside an English help note.
-_THAI_RUN = re.compile(r"[฀-๿]+(?:\s+[฀-๿]+)*")
+_THAI_RUN = re.compile(r"[\u0e00-\u0e7f]+(?:\s+[\u0e00-\u0e7f]+)*")
 
 
 def _note_piece(note: str, start: int, end: int, lang: Lang) -> Segment | None:

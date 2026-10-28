@@ -148,7 +148,7 @@ async def test_safe_warm_up_logs_instead_of_raising(caplog):
 def test_voices_endpoint_without_azure_is_empty(make_client):
     client, _ = make_client([OPENING])
     with client:
-        assert client.get("/api/voices").json() == {"voices": [], "default": "premwadee", "word_timing": False}
+        assert client.get("/api/voices").json() == {"voices": [], "default": "premwadee"}
 
 
 def test_voice_catalog_validates_and_passes_voices_through(tmp_path):
@@ -163,7 +163,7 @@ def test_voice_catalog_validates_and_passes_voices_through(tmp_path):
     client = TestClient(create_app(manager, db, voices=list(VOICES.values())), base_url="http://127.0.0.1:8765")
     with client:
         body = client.get("/api/voices").json()
-        assert body["default"] == "premwadee" and body["word_timing"] is True
+        assert body["default"] == "premwadee"
         assert {"id": "achara", "label": VOICES["achara"].label} in body["voices"]
         r = client.post("/api/sessions", json={"topic": "day", "voice": "nope"})
         assert r.status_code == 400 and r.json()["error"] == "bad_request"

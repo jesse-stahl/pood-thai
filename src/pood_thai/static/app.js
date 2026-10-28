@@ -182,8 +182,20 @@ function loadClip(messageId, { autoplay = true, at = 0 } = {}) {
   return true;
 }
 
-async function ensureClip(messageId) {
-  if (clipFor(messageId)) return true;
+const pendingClips = new Map(); // `${messageId}|${voice key}` -> in-flight ensureClip promise
+
+function ensureClip(messageId) {
+  if (clipFor(messageId)) return Promise.resolve(true);
+  // A second request for the same clip (e.g. R pressed while a voice switch loads) shares the first one,
+  // so it doesn't revoke the URL the player is already using.
+  const pendingKey = `${messageId}|${voiceKey()}`;
+  if (!pendingClips.has(pendingKey)) {
+    pendingClips.set(pendingKey, fetchClip(messageId).finally(() => pendingClips.delete(pendingKey)));
+  }
+  return pendingClips.get(pendingKey);
+}
+
+async function fetchClip(messageId) {
   if (state.sessionId === null) return false;
   const session = state.sessionId;
   const key = voiceKey();
@@ -245,9 +257,13 @@ function stepWords(dir) {
   refreshPlayer();
 }
 
-function seekToWord(messageId, index) {
+async function seekToWord(messageId, word) {
   if (state.recording) return;
-  const at = clipFor(messageId)?.words[index]?.t_start ?? 0;
+  // The line may have been rendered from another voice's clip, so fetch this voice's and match by position.
+  if (!(await ensureClip(messageId)) || state.recording) return;
+  const words = clipFor(messageId).words;
+  const match = words.find((w) => w.part === word.part && w.end > word.start);
+  const at = match?.t_start ?? 0;
   if (messageId === state.currentId) {
     player.currentTime = at;
     if (player.paused) play();
@@ -346,7 +362,10 @@ function renderWords(messageId) {
   const message = messages.get(messageId);
   const row = document.querySelector(`.msg[data-id="${messageId}"]`);
   if (!message || !row || message.role !== "assistant") return;
-  const words = clipFor(messageId)?.words ?? [];
+  // Fall back to any voice's timings so lines stay clickable after a voice switch; a click fetches the new voice.
+  const byVoice = clips.get(messageId);
+  const clip = clipFor(messageId) ?? [...(byVoice?.values() ?? [])].find((c) => c.words.length);
+  const words = clip?.words ?? [];
   for (const line of row.querySelectorAll("p[data-part]")) {
     const part = line.dataset.part;
     const text = part === "note" ? message.english_note : message.thai;
@@ -356,7 +375,7 @@ function renderWords(messageId) {
       span.className = "word";
       span.dataset.word = String(piece.word);
       span.textContent = piece.text;
-      span.addEventListener("click", () => seekToWord(messageId, piece.word));
+      span.addEventListener("click", () => seekToWord(messageId, words[piece.word]));
       return span;
     }));
   }
@@ -465,6 +484,7 @@ async function startSession(topicId) {
     showNotice("Microphone access is blocked. Click the icon left of the address bar → Microphone → Allow, then reload the page.", "error");
     return;
   }
+  await voicesReady;
   showScreen("chat");
   resetPlayer();
   $("transcript").replaceChildren();
@@ -672,6 +692,7 @@ bindButton("btn-end", endSession);
 setRate(state.rate);
 applyHideEnglish();
 showScreen("topics");
-loadVoices().catch(() => {});
+// A stored voice may no longer exist (Azure key removed, catalog changed); never send it unchecked.
+const voicesReady = loadVoices().catch(() => { state.voice = null; });
 loadTopics().catch((err) => showNotice(errorText(err), "error"));
 loadMemory().catch(() => {});
