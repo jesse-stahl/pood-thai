@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import importlib
 import io
 import logging
 import subprocess
@@ -169,7 +170,7 @@ def map_words(spans: list[SsmlSpan], boundaries: list[Boundary]) -> tuple[Word, 
 
 
 def _azure_synthesize(key: str, region: str, ssml: str) -> tuple[bytes, list[Boundary]]:
-    import azure.cognitiveservices.speech as speechsdk  # native library; load only when Azure is used
+    speechsdk = importlib.import_module("azure.cognitiveservices.speech")  # native library; load only when Azure is used
 
     config = speechsdk.SpeechConfig(subscription=key, region=region)
     config.set_speech_synthesis_output_format(speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm)
