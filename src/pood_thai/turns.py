@@ -72,19 +72,25 @@ def parse_facts(raw: str) -> list[str]:
     return cleaned[:MAX_FACTS]
 
 
+def _unspaced(text: str) -> str:
+    return "".join(text.split())
+
+
 def parse_review(raw: str, sentences: list[str]) -> tuple[tuple[ReviewItem, ...], tuple[str, ...]]:
     """One item per learner sentence (matched by number); anything unclear counts as ok."""
     data = extract_json_object(raw)
     entries = data.get("items")
     if not isinstance(entries, list):
         raise TurnParseError("'items' is not a list")
-    by_number = {e["n"]: e for e in entries if isinstance(e, dict) and isinstance(e.get("n"), int)}
+    # type() rather than isinstance(): JSON true would otherwise count as sentence 1.
+    by_number = {e["n"]: e for e in entries if isinstance(e, dict) and type(e.get("n")) is int}
     items: list[ReviewItem] = []
     for n, said in enumerate(sentences, start=1):
         entry = by_number.get(n, {})
         better = _text(entry, "better")
         why = _text(entry, "why")
-        if entry.get("ok") is False and better and better != said.strip():
+        # Speech recognition spacing is noise (the prompt says to ignore it), so a respaced copy is no fix.
+        if entry.get("ok") is False and better and _unspaced(better) != _unspaced(said):
             items.append(ReviewItem(said, False, better, why))
         else:
             items.append(ReviewItem(said, True))

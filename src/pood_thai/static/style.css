@@ -105,4 +105,3 @@ kbd { font: inherit; font-size: 0.8rem; border: 1px solid var(--line); border-ra
 .review-item .why { margin: 6px 0 0; color: var(--muted); font-size: 0.9rem; }
 .tips { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px 4px; }
 .tips h3 { margin: 0 0 4px; font-size: 1rem; }
-.current { border-color: var(--speak); }

@@ -6,6 +6,7 @@ import base64
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -82,7 +83,7 @@ def review_json(review: Review) -> dict:
         "topic": review.topic,
         "topic_label": _topic_label(review.topic),
         "created_at": review.created_at,
-        "items": [{"said": i.said, "ok": i.ok, "better": i.better, "why": i.why} for i in review.items],
+        "items": [asdict(i) for i in review.items],
         "tips": list(review.tips),
     }
 
@@ -162,7 +163,7 @@ def create_app(
 
     @app.exception_handler(ReviewNotFound)
     async def _review_not_found(_: Request, exc: ReviewNotFound):
-        return _error(404, "review_not_found", f"No review item {exc}")
+        return _error(404, "review_not_found", f"No review or playable item {exc.args[0]}")
 
     @app.exception_handler(NoSpeech)
     async def _no_speech(_: Request, exc: NoSpeech):

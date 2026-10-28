@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -113,9 +114,7 @@ class Database:
     def add_review(
         self, session_id: int, topic: str, items: tuple[ReviewItem, ...], tips: tuple[str, ...]
     ) -> Review:
-        items_json = json.dumps(
-            [{"said": i.said, "ok": i.ok, "better": i.better, "why": i.why} for i in items], ensure_ascii=False
-        )
+        items_json = json.dumps([asdict(i) for i in items], ensure_ascii=False)
         with self._conn:
             cur = self._conn.execute(
                 "INSERT INTO reviews (session_id, topic, created_at, items, tips) VALUES (?, ?, ?, ?, ?)",

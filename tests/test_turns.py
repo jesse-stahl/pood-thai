@@ -92,3 +92,9 @@ def test_parse_review_rejects_garbage():
         parse_review("no json here", ["ก"])
     with pytest.raises(TurnParseError):
         parse_review('{"items": "x"}', ["ก"])
+
+
+def test_parse_review_ignores_spacing_only_changes_and_boolean_numbers():
+    raw = '{"items": [{"n": true, "ok": false, "better": "x", "why": "?"}, {"n": 2, "ok": false, "better": "ไปตลาดครับ"}]}'
+    items, _ = parse_review(raw, ["ก", "ไป ตลาด ครับ"])
+    assert items == (ReviewItem("ก", True), ReviewItem("ไป ตลาด ครับ", True))

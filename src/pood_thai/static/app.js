@@ -210,7 +210,11 @@ function ensureClip(key) {
   // so it doesn't revoke the URL the player is already using.
   const pendingKey = `${key}|${voiceKey()}`;
   if (!pendingClips.has(pendingKey)) {
-    pendingClips.set(pendingKey, fetchClip(key).finally(() => pendingClips.delete(pendingKey)));
+    // Only clear our own entry: resetPlayer may have replaced it with a newer request for the same key.
+    const pending = fetchClip(key).finally(() => {
+      if (pendingClips.get(pendingKey) === pending) pendingClips.delete(pendingKey);
+    });
+    pendingClips.set(pendingKey, pending);
   }
   return pendingClips.get(pendingKey);
 }
@@ -371,6 +375,7 @@ function resetPlayer() {
   stopPlayback();
   for (const key of [...clips.keys()]) dropClips(key);
   owners.clear();
+  pendingClips.clear(); // in-flight fetches belong to owners that are gone
   messages.clear();
   state.currentKey = null;
   state.activeWord = -1;
@@ -506,8 +511,7 @@ function showReview(review) {
 
 function closeReview() {
   resetPlayer();
-  showScreen("topics");
-  loadReviews().catch(() => {});
+  showScreen("topics"); // the list was refreshed when the session ended
 }
 
 async function openReview(reviewId) {
